@@ -1,0 +1,134 @@
+# Builds the Python package and publishes it.
+#
+# - Run it by hand (Actions -> Release -> Run workflow) to publish to
+#   TestPyPI. Use this as a dry run before every real release.
+# - Push a tag such as `v0.2.0` to publish to PyPI. The tag must match the
+#   version in the root Cargo.toml, and the `pypi` environment can require
+#   a person to approve the upload.
+#
+# Nothing here holds a password or token. PyPI trusts this workflow in this
+# repository ("trusted publishing"), and GitHub proves to PyPI that the
+# upload comes from it.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Check the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import json, sys; print(json.load(sys.stdin)['packages'][0]['version'])")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "The tag is $GITHUB_REF_NAME but Cargo.toml says $version."
+            echo "Change [workspace.package] version in Cargo.toml, or tag v$version."
+            exit 1
+          fi
+
+  wheels:
+    name: Wheel (${{ matrix.name }})
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `test: true` installs the wheel on the build machine and runs the
+          # Python tests against it. The other two are built for a different
+          # processor than the runner has, so they cannot run there.
+          - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, test: true }
+          - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, test: false }
+          - { name: windows-x64, runner: windows-latest, target: x64, test: true }
+          - { name: macos-arm64, runner: macos-latest, target: aarch64, test: true }
+          - { name: macos-x86_64, runner: macos-latest, target: x86_64, test: false }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          target: ${{ matrix.target }}
+          # manylinux wheels run on almost every Linux; ignored elsewhere.
+          manylinux: auto
+          args: --release --out dist
+
+      - name: Test the wheel
+        if: matrix.test
+        shell: bash
+        run: |
+          python -m venv .venv-test
+          if [ -d .venv-test/Scripts ]; then source .venv-test/Scripts/activate; else source .venv-test/bin/activate; fi
+          # --no-index: install exactly the wheel just built, not one from PyPI.
+          pip install --no-index --find-links python/dist reconcilers
+          pip install pytest pyarrow pandas polars
+          pytest python/tests
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: python/dist
+
+  sdist:
+    name: Source package
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the source package
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: python/dist
+
+  publish:
+    name: Publish to ${{ startsWith(github.ref, 'refs/tags/') && 'PyPI' || 'TestPyPI' }}
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: ${{ startsWith(github.ref, 'refs/tags/') && 'pypi' || 'testpypi' }}
+    permissions:
+      # Lets this job prove to PyPI that it is this workflow.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to TestPyPI
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # TestPyPI never accepts the same version twice. Skipping files
+          # that are already there lets a dry run be repeated.
+          skip-existing: true
+
+      - name: Publish to PyPI
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: pypa/gh-action-pypi-publish@release/v1
