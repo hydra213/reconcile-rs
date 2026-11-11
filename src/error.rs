@@ -1,5 +1,5 @@
 //! The error type for everything that can go wrong while *running* a
-//! reconciliation: unreadable files, invalid Parquet, unwritable reports.
+//! reconciliation: unreadable files, invalid Parquet, unusable configuration.
 //!
 //! A dataset difference is never an `Error`. Differences are findings in a
 //! report; an `Error` means no trustworthy report could be produced at all.
@@ -27,12 +27,6 @@ pub enum Error {
         "`{path}` has more than one column named `{column}`, so columns cannot be matched by name"
     )]
     DuplicateColumn { path: PathBuf, column: String },
-
-    #[error("cannot write report to `{path}`")]
-    WriteReport {
-        path: PathBuf,
-        source: std::io::Error,
-    },
 
     #[error("cannot read rows from `{path}`")]
     ReadRows {

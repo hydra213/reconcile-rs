@@ -30,6 +30,11 @@ Columns:
   `quantity`: 0 mismatch(es)
   `trade_amount`: 1 mismatch(es)
 
+Examples (at most 10 of each kind; values are hidden, set `[report] show_values = true` to see them):
+  only on the left: key fingerprint c46d15685335e23d
+  only on the right: key fingerprint 08310d9533563235
+  changed: key fingerprint fa1fd134d8ad2873: `trade_amount`
+
 Fingerprints: DIFFERENT (blake3, canonical version 1)
   A screening signal over the key and compared columns, not a verdict.
   left content   a59bcf738a7f7315e1a1b666a8e919d4c31898f806a3de2c67432f8715b6f860

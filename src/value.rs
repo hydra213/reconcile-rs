@@ -51,6 +51,58 @@ impl Value {
     }
 }
 
+impl fmt::Display for Value {
+    /// Writes the value the way it is shown in reports.
+    ///
+    /// Strings are quoted, so the text `"NULL"` cannot be mistaken for a
+    /// missing value, which is written as a bare `NULL`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => f.write_str("NULL"),
+            Self::Boolean(flag) => write!(f, "{flag}"),
+            Self::Integer(number) => write!(f, "{number}"),
+            Self::Float(float) => write!(f, "{}", float.as_f64()),
+            Self::Decimal(decimal) => write!(f, "{decimal}"),
+            Self::Utf8(text) => write!(f, "{text:?}"),
+            Self::Binary(bytes) => {
+                f.write_str("0x")?;
+                bytes.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+            }
+            Self::Date(days) => match date_from_epoch_days(*days) {
+                Some(date) => write!(f, "{date}"),
+                None => write!(f, "day {days} since 1970-01-01"),
+            },
+            Self::Instant(nanoseconds) => match date_time_from_epoch_nanoseconds(*nanoseconds) {
+                Some(date_time) => write!(f, "{}Z", date_time.format("%Y-%m-%dT%H:%M:%S%.f")),
+                None => write!(f, "{nanoseconds} ns since 1970-01-01T00:00:00Z"),
+            },
+            Self::NaiveTimestamp(nanoseconds) => {
+                match date_time_from_epoch_nanoseconds(*nanoseconds) {
+                    Some(date_time) => write!(f, "{}", date_time.format("%Y-%m-%dT%H:%M:%S%.f")),
+                    None => write!(f, "{nanoseconds} ns since 1970-01-01T00:00:00"),
+                }
+            }
+        }
+    }
+}
+
+/// The calendar date for a day count, or `None` if it is out of range.
+fn date_from_epoch_days(days: i32) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?
+        .checked_add_signed(chrono::Duration::days(days.into()))
+}
+
+/// The date and time for a nanosecond count, or `None` if it is out of
+/// the range the calendar library supports.
+fn date_time_from_epoch_nanoseconds(nanoseconds: i128) -> Option<chrono::NaiveDateTime> {
+    const NANOSECONDS_PER_SECOND: i128 = 1_000_000_000;
+    // `div_euclid` and `rem_euclid` keep the remainder positive for times
+    // before 1970, which is what the calendar library expects.
+    let seconds = i64::try_from(nanoseconds.div_euclid(NANOSECONDS_PER_SECOND)).ok()?;
+    let remainder = u32::try_from(nanoseconds.rem_euclid(NANOSECONDS_PER_SECOND)).ok()?;
+    Some(chrono::DateTime::from_timestamp(seconds, remainder)?.naive_utc())
+}
+
 /// The family a column's values belong to. Two columns can be compared only
 /// when they belong to the same family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -437,6 +489,29 @@ mod tests {
 
         let zero = Decimal::new(0, 4);
         assert_eq!((zero.unscaled(), zero.scale()), (0, 0));
+    }
+
+    #[test]
+    fn values_are_displayed_unambiguously() {
+        let shown = |value: Value| value.to_string();
+
+        assert_eq!(shown(Value::Null), "NULL");
+        assert_eq!(shown(Value::Utf8("NULL".to_string())), "\"NULL\"");
+        assert_eq!(shown(Value::Integer(-7)), "-7");
+        assert_eq!(shown(Value::Decimal(Decimal::new(275_050, 2))), "2750.5");
+        assert_eq!(shown(Value::Float(NormalizedFloat::new(f64::NAN))), "NaN");
+        assert_eq!(shown(Value::Binary(vec![0, 255])), "0x00ff");
+        assert_eq!(shown(Value::Date(20_458)), "2026-01-05");
+        assert_eq!(
+            shown(Value::Instant(1_767_605_400_000_000_000)),
+            "2026-01-05T09:30:00Z"
+        );
+        assert_eq!(
+            shown(Value::NaiveTimestamp(1_767_605_400_500_000_000)),
+            "2026-01-05T09:30:00.500"
+        );
+        // One nanosecond before the epoch.
+        assert_eq!(shown(Value::Instant(-1)), "1969-12-31T23:59:59.999999999Z");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 source: tests/cli_cases.rs
-expression: first_json
+expression: findings
 ---
 {
   "report_version": 1,
@@ -214,7 +214,33 @@ expression: first_json
         "mismatches": 1,
         "within_tolerance": 0
       }
-    ]
+    ],
+    "samples": {
+      "limit": 10,
+      "values_shown": false,
+      "left_only_keys": [
+        {
+          "key_fingerprint": "c46d15685335e23d10bd438ee493e905b77613d897c09d71d08f178a4397b2bf"
+        }
+      ],
+      "right_only_keys": [
+        {
+          "key_fingerprint": "08310d95335632354c409e48b81faaef346ee12b3ef89d619b0e229e37c29dd2"
+        }
+      ],
+      "duplicate_keys_left": [],
+      "duplicate_keys_right": [],
+      "changed_rows": [
+        {
+          "key_fingerprint": "fa1fd134d8ad2873df8060539d502b91fe7b7f605e39d8f84b86c8c816cf0768",
+          "changes": [
+            {
+              "column": "trade_amount"
+            }
+          ]
+        }
+      ]
+    }
   },
   "fingerprints": {
     "algorithm": "blake3",
@@ -223,7 +249,7 @@ expression: first_json
       "unicode": "none",
       "naive_timestamps": "distinct"
     },
-    "configuration": "4a1edf1af606f35539b281bb991051bb115267c5770214f738fcd80834e5328a",
+    "configuration": "ce926d1a6b245a85865e7c9d87f545e1b79579a3c2c105e9ad5b51dafd03de4f",
     "left": {
       "schema": "4ad4ee434d9b6ff51b8f34a170123d8c7d066d4a77a7eeb0e5accb1a8855567e",
       "content": "a59bcf738a7f7315e1a1b666a8e919d4c31898f806a3de2c67432f8715b6f860"

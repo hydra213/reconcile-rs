@@ -11,6 +11,7 @@ use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray, Time64Micros
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 
 /// A row of the small `accounts` table used in tests: `(id, owner, balance)`.
 /// `None` is NULL.
@@ -62,15 +63,44 @@ pub fn shops_with_opening_time() -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), columns).expect("the columns match the schema")
 }
 
+/// Builds a batch from named columns. Every column is nullable.
+pub fn batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
+    RecordBatch::try_from_iter_with_nullable(
+        columns.into_iter().map(|(name, array)| (name, array, true)),
+    )
+    .expect("the columns should have equal lengths and unique names")
+}
+
 /// Writes a batch to a Parquet file in Cargo's scratch directory for
 /// integration tests and returns its path. Use a unique `file_name` per test,
 /// because tests run in parallel.
 pub fn write_parquet(file_name: &str, batch: &RecordBatch) -> PathBuf {
+    write_parquet_with_properties(file_name, batch, WriterProperties::default())
+}
+
+/// Like [`write_parquet`], but splits the rows into row groups of at most
+/// `rows_per_group` rows, to exercise files with many row groups.
+pub fn write_parquet_in_row_groups(
+    file_name: &str,
+    batch: &RecordBatch,
+    rows_per_group: usize,
+) -> PathBuf {
+    let properties = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(rows_per_group))
+        .build();
+    write_parquet_with_properties(file_name, batch, properties)
+}
+
+fn write_parquet_with_properties(
+    file_name: &str,
+    batch: &RecordBatch,
+    properties: WriterProperties,
+) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(file_name);
     let file = File::create(&path).expect("the scratch directory should be writable");
 
-    let mut writer =
-        ArrowWriter::try_new(file, batch.schema(), None).expect("the schema is valid Parquet");
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(properties))
+        .expect("the schema is valid Parquet");
     writer.write(batch).expect("the batch should be written");
     writer.close().expect("the file should be finished");
     path

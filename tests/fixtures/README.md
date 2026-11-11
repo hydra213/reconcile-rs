@@ -52,5 +52,8 @@ Int32 on the left and Int64 on the right, because both are integers.
 
 ## Other files
 
-`keyed_on_id.toml` is a minimal configuration used by tests that write their
-own small Parquet files.
+- `keyed_on_id.toml` is a minimal configuration used by tests that write
+  their own small Parquet files.
+- `show_values.toml` is `examples/reconcile.toml` with
+  `[report] show_values = true`, used to test that real keys and values
+  appear in a report only when asked for.

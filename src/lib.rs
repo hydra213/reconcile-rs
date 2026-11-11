@@ -18,6 +18,7 @@
 //! | [`fingerprint`]   | Hash files, schemas and table content.                       |
 //! | [`policy`]        | Turn facts into verdicts (pass / warn / inconclusive / fail).|
 //! | [`report`]        | Assemble facts and verdicts into a deterministic report.     |
+//! | [`run`]           | Record what is specific to one run: time, paths, file sizes. |
 //!
 //! Facts and verdicts are kept apart on purpose: `schema` and `rowdiff`
 //! never decide whether a difference is acceptable, and `policy` never looks
@@ -37,6 +38,7 @@ pub mod plan;
 pub mod policy;
 pub mod report;
 pub mod rowdiff;
+pub mod run;
 pub mod schema;
 pub mod table;
 pub mod tolerance;
@@ -47,6 +49,7 @@ use std::path::PathBuf;
 pub use config::Config;
 pub use error::Error;
 use fingerprint::Fingerprint;
+use parquet_input::InputFile;
 use plan::ComparisonPlan;
 use policy::SchemaPolicy;
 use report::{FingerprintSection, Report, RowSection, SchemaSection, SideFingerprints};
@@ -68,6 +71,17 @@ pub fn compare_parquet_schemas(
     Ok(Report::schema_only(schema_section))
 }
 
+/// The result of [`compare_parquet`].
+#[derive(Debug, Clone)]
+pub struct Reconciliation {
+    /// The deterministic report: facts, verdicts and fingerprints.
+    pub report: Report,
+    /// The files that were read, with their sizes and fingerprints. Kept
+    /// outside the report because they depend on file layout and location.
+    pub left_files: Vec<InputFile>,
+    pub right_files: Vec<InputFile>,
+}
+
 /// Compares two Parquet datasets: first their schemas, then their rows.
 ///
 /// Each side is one or more Parquet files. Both datasets are loaded into
@@ -76,7 +90,7 @@ pub fn compare_parquet(
     config: &Config,
     left: &[PathBuf],
     right: &[PathBuf],
-) -> Result<Report, Error> {
+) -> Result<Reconciliation, Error> {
     let left_dataset = parquet_input::read_dataset(left)?;
     let right_dataset = parquet_input::read_dataset(right)?;
 
@@ -107,7 +121,7 @@ pub fn compare_parquet(
         &plan.compared_columns,
         &plan.tolerances,
     );
-    let row_section = RowSection::new(&plan, &diff, &config.policy);
+    let row_section = RowSection::new(&plan, &diff, &config.policy, &config.report);
 
     let fingerprint_section = FingerprintSection::new(
         plan.normalization,
@@ -122,9 +136,9 @@ pub fn compare_parquet(
         },
     );
 
-    Ok(Report::new(
-        schema_section,
-        row_section,
-        fingerprint_section,
-    ))
+    Ok(Reconciliation {
+        report: Report::new(schema_section, row_section, fingerprint_section),
+        left_files: left_dataset.files,
+        right_files: right_dataset.files,
+    })
 }
