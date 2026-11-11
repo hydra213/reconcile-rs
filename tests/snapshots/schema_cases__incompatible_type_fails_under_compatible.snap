@@ -1,0 +1,54 @@
+---
+source: tests/schema_cases.rs
+expression: "report_json(baseline(), right, SchemaPolicy::Compatible)"
+---
+{
+  "report_version": 1,
+  "schema_policy": "compatible",
+  "verdict": "fail",
+  "findings": [
+    {
+      "kind": "type_changed",
+      "column": "price",
+      "left": "Decimal128(18, 4)",
+      "right": "Float64",
+      "rule": "incompatible_type_change",
+      "verdict": "fail",
+      "explanation": "The type change is not on the list of lossless changes and needs an explicit decision."
+    }
+  ],
+  "left_columns": [
+    {
+      "name": "price",
+      "data_type": "Decimal128(18, 4)",
+      "nullable": true
+    },
+    {
+      "name": "quantity",
+      "data_type": "Int32",
+      "nullable": true
+    },
+    {
+      "name": "trade_id",
+      "data_type": "Int64",
+      "nullable": false
+    }
+  ],
+  "right_columns": [
+    {
+      "name": "price",
+      "data_type": "Float64",
+      "nullable": true
+    },
+    {
+      "name": "quantity",
+      "data_type": "Int32",
+      "nullable": true
+    },
+    {
+      "name": "trade_id",
+      "data_type": "Int64",
+      "nullable": false
+    }
+  ]
+}

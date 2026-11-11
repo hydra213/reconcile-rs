@@ -1,0 +1,44 @@
+---
+source: tests/schema_cases.rs
+expression: "report_json(baseline(), baseline(), SchemaPolicy::Strict)"
+---
+{
+  "report_version": 1,
+  "schema_policy": "strict",
+  "verdict": "pass",
+  "findings": [],
+  "left_columns": [
+    {
+      "name": "price",
+      "data_type": "Decimal128(18, 4)",
+      "nullable": true
+    },
+    {
+      "name": "quantity",
+      "data_type": "Int32",
+      "nullable": true
+    },
+    {
+      "name": "trade_id",
+      "data_type": "Int64",
+      "nullable": false
+    }
+  ],
+  "right_columns": [
+    {
+      "name": "price",
+      "data_type": "Decimal128(18, 4)",
+      "nullable": true
+    },
+    {
+      "name": "quantity",
+      "data_type": "Int32",
+      "nullable": true
+    },
+    {
+      "name": "trade_id",
+      "data_type": "Int64",
+      "nullable": false
+    }
+  ]
+}
