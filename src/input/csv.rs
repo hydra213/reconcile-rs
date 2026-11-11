@@ -279,6 +279,23 @@ mod tests {
     }
 
     #[test]
+    fn timestamps_can_carry_a_named_time_zone() {
+        let config = config_with_types(&[("at", "timestamp[us, UTC]")]);
+
+        let (schema, batches) = read(&file("at\n2026-01-05T09:30:00Z\n"), &config).unwrap();
+
+        assert_eq!(
+            schema.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        let micros = batches[0]
+            .column(0)
+            .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+            .value(0);
+        assert_eq!(micros, 1_767_605_400_000_000);
+    }
+
+    #[test]
     fn a_value_that_does_not_fit_its_type_is_an_error() {
         let config = config_with_types(&[("id", "int64")]);
 

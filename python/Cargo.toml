@@ -1,9 +1,10 @@
 [package]
 name = "reconcilers-python"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Python bindings for ReconcileRS."
 license = "MIT"
+repository = "https://github.com/hydra213/reconcile-rs"
 publish = false
 
 # The compiled module is imported in Python as `reconcilers._native`.

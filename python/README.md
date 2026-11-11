@@ -13,15 +13,21 @@ The comparison runs in Rust. This package is a thin Python layer over the
 
 ## Install
 
-From a checkout of the repository (needs a [Rust toolchain](https://rustup.rs)):
+```bash
+pip install reconcilers
+```
+
+Wheels are published for Linux, Windows and macOS, for Python 3.9 and
+later. pandas dataframes also need `pyarrow` (`pip install "reconcilers[pandas]"`).
+
+To build from a checkout of the repository instead (needs a
+[Rust toolchain](https://rustup.rs)):
 
 ```bash
 pip install maturin
 cd python
 maturin develop --release      # builds and installs into the active environment
 ```
-
-pandas dataframes also need `pyarrow`.
 
 ## Use
 

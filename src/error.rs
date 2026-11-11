@@ -23,7 +23,9 @@ pub enum Error {
         source: url::ParseError,
     },
 
-    #[error("cannot read `{location}` from object storage")]
+    #[error(
+        "cannot read `{location}` from object storage; check that it exists and that this cloud's credentials are set in the environment"
+    )]
     ReadObjectStorage {
         location: String,
         source: object_store::Error,
