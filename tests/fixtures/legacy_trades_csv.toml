@@ -1,0 +1,12 @@
+# Reads `legacy_trades.csv` with the same column types as
+# `legacy_trades.parquet`, so the two hold equal values.
+[comparison]
+keys = ["trade_id"]
+
+[csv.types]
+trade_id = "int64"
+business_date = "date"
+trade_amt = "decimal(18, 2)"
+quantity = "int32"
+price = "decimal(18, 4)"
+booked_at = "timestamp[us, UTC]"

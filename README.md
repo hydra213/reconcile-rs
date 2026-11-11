@@ -341,7 +341,7 @@ something is judged acceptable or not.
 cargo test                             # all tests
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo run --example generate_fixtures  # regenerate tests/fixtures/*.parquet
+cargo run --example generate_fixtures  # regenerate the files in tests/fixtures/
 ```
 
 | Tests | What they cover |
@@ -351,12 +351,57 @@ cargo run --example generate_fixtures  # regenerate tests/fixtures/*.parquet
 | `tests/properties.rs` | Rules that must hold for any data, checked on random tables. |
 | `tests/row_cases.rs`, `tests/schema_cases.rs` | Library behaviour and report snapshots. |
 | `tests/input_cases.rs` | Reading CSV files, folders and object storage URLs. |
+| `tests/cloud_cases.rs` | Reading from a real bucket. Skipped unless you point it at one, see below. |
 | `tests/cli_cases.rs` | The real binary: output, files and exit codes. |
 | `python/tests/` | The Python package, with files and with pandas, Polars, PySpark and pyarrow dataframes. |
 
 Snapshot tests use [insta](https://insta.rs). When a report changes on
 purpose, run `INSTA_UPDATE=always cargo test`, read the diff in
 `tests/snapshots/`, and commit it.
+
+### Testing against a real bucket
+
+`tests/cloud_cases.rs` reads the sample files from object storage and checks
+that they give exactly the same rows as the local copies. It does nothing
+unless you point it at a location of your own:
+
+1. Copy the whole `tests/fixtures/` folder to the bucket, for example
+   `aws s3 cp --recursive tests/fixtures s3://my-bucket/reconcilers-test/`.
+2. Set the usual credentials of that cloud in your environment.
+3. Run it, with the location ending in `/`:
+
+```bash
+RECONCILERS_TEST_S3=s3://my-bucket/reconcilers-test/ cargo test --test cloud_cases -- --nocapture
+```
+
+Use `RECONCILERS_TEST_AZURE` for an `abfss://` location and
+`RECONCILERS_TEST_GCS` for a `gs://` one. Credentials stay in your
+environment; nothing is written to the bucket.
+
+### Releasing the Python package
+
+Releases are built and uploaded by
+[`.github/workflows/release.yml`](.github/workflows/release.yml), with wheels
+for Linux (x86-64 and ARM), Windows and macOS (Apple Silicon and Intel).
+Every wheel that can run on its build machine is installed there and tested
+before anything is uploaded. PyPI trusts this workflow directly, so no token
+is stored anywhere.
+
+1. Set the version in `[workspace.package]` in the root `Cargo.toml` and
+   commit it. The crate, the CLI and the Python package all use it.
+2. Dry run: on GitHub, open **Actions → Release → Run workflow**. This
+   uploads to [TestPyPI](https://test.pypi.org/project/reconcilers/). Check
+   it with
+   `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ reconcilers`.
+3. Release: tag the commit and push the tag.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow stops if the tag does not match the version in `Cargo.toml`.
+The upload to PyPI waits for approval in the `pypi` environment.
 
 ## Limitations
 
@@ -365,9 +410,9 @@ purpose, run `INSTA_UPDATE=always cargo test`, read the diff in
 - Files are Parquet or CSV. There are no built-in database readers; a
   warehouse table reaches the engine as Arrow, for example a query result
   passed to the Python package.
-- Object storage has been tested through local `file://` URLs only, which
-  use the same code path. It has not been run against a real S3, Azure or
-  GCS account yet.
+- Object storage is tested on every run through local `file://` URLs, which
+  use the same code path. Tests against a real S3, Azure or GCS account
+  are run by hand (see "Testing against a real bucket").
 - A file is always read whole, also by the `schema` command and also from
   object storage.
 - CSV files need a header row, and every CSV file in one run shares the

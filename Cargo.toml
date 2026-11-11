@@ -1,6 +1,6 @@
 [package]
 name = "reconcilers"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Deterministic data reconciliation for Parquet datasets: schema, keys, values and auditable verdicts."
 license = "MIT"
@@ -16,11 +16,19 @@ exclude = ["/python", "/.github"]
 [workspace]
 members = ["python"]
 
+# The one version number of the project. The Rust crate, the command-line
+# tool and the Python package all take it from here, and the release
+# workflow refuses to publish when a tag such as `v0.1.0` disagrees with it.
+[workspace.package]
+version = "0.1.0"
+
 # Versions are pinned to a minor release on purpose. Arrow and Parquet release
 # together and must always share the same major version.
 [dependencies]
 anyhow = "1.0"
-arrow = { version = "60.1", default-features = false }
+# `chrono-tz` lets timestamps carry named time zones such as `UTC` or
+# `Australia/Sydney`, which CSV columns can declare.
+arrow = { version = "60.1", default-features = false, features = ["chrono-tz"] }
 arrow-csv = "60.1"
 blake3 = "1.8"
 bytes = "1.12"
