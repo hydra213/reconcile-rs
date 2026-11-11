@@ -1,0 +1,7 @@
+---
+source: tests/cli_cases.rs
+expression: stdout(&output)
+---
+Schema: PASS (policy: strict)
+Columns: 7 left, 7 right
+No schema differences.

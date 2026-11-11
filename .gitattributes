@@ -1,0 +1,4 @@
+# Keep line endings identical on Windows, macOS and Linux so snapshot tests
+# and byte-identical reports behave the same everywhere.
+* text=auto eol=lf
+*.parquet binary

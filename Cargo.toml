@@ -1,0 +1,24 @@
+[package]
+name = "reconcilers"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Deterministic data reconciliation for Parquet datasets: schema, keys, values and auditable verdicts."
+readme = "README.md"
+repository = "https://github.com/hydra213/reconcile-rs"
+keywords = ["parquet", "arrow", "reconciliation", "data-quality", "diff"]
+categories = ["command-line-utilities", "database"]
+
+# Versions are pinned to a minor release on purpose. Arrow and Parquet release
+# together and must always share the same major version.
+[dependencies]
+anyhow = "1.0"
+arrow = { version = "60.1", default-features = false }
+clap = { version = "4.6", features = ["derive"] }
+parquet = "60.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+[dev-dependencies]
+insta = "1.49"

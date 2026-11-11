@@ -1,0 +1,57 @@
+---
+source: tests/schema_cases.rs
+expression: "report_json(baseline(), right, SchemaPolicy::Compatible)"
+---
+{
+  "report_version": 1,
+  "schema_policy": "compatible",
+  "verdict": "warn",
+  "findings": [
+    {
+      "kind": "column_added",
+      "column": "desk",
+      "rule": "column_added",
+      "verdict": "warn",
+      "explanation": "A new column does not affect existing data, but it has no baseline to compare against."
+    }
+  ],
+  "left_columns": [
+    {
+      "name": "price",
+      "data_type": "Decimal128(18, 4)",
+      "nullable": true
+    },
+    {
+      "name": "quantity",
+      "data_type": "Int32",
+      "nullable": true
+    },
+    {
+      "name": "trade_id",
+      "data_type": "Int64",
+      "nullable": false
+    }
+  ],
+  "right_columns": [
+    {
+      "name": "desk",
+      "data_type": "Utf8",
+      "nullable": true
+    },
+    {
+      "name": "price",
+      "data_type": "Decimal128(18, 4)",
+      "nullable": true
+    },
+    {
+      "name": "quantity",
+      "data_type": "Int32",
+      "nullable": true
+    },
+    {
+      "name": "trade_id",
+      "data_type": "Int64",
+      "nullable": false
+    }
+  ]
+}
