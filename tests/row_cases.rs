@@ -71,6 +71,8 @@ fn missing_extra_and_changed_rows_are_counted() {
             .contains(&ColumnResult::Compared {
                 column: "balance".to_string(),
                 mismatches: 1,
+                tolerance: None,
+                within_tolerance: 0,
             })
     );
 }
@@ -201,4 +203,117 @@ fn files_with_different_schemas_cannot_form_one_dataset() {
     let result = compare_parquet(&config(KEYED_ON_ID), &[ints.clone(), floats], &[ints]);
 
     assert!(matches!(result, Err(Error::FilesDisagreeOnSchema { .. })));
+}
+
+#[test]
+fn a_difference_within_tolerance_passes_but_fingerprints_still_differ() {
+    let left = write_parquet(
+        "tolerance_left.parquet",
+        &accounts(&[
+            (Some(1), Some("ann"), Some(100)),
+            (Some(2), Some("bob"), Some(200)),
+        ]),
+    );
+    let right = write_parquet(
+        "tolerance_right.parquet",
+        &accounts(&[
+            (Some(1), Some("ann"), Some(100)),
+            (Some(2), Some("bob"), Some(203)),
+        ]),
+    );
+    let within_five = config(
+        r#"
+        [comparison]
+        keys = ["id"]
+
+        [[tolerances]]
+        column = "balance"
+        max_difference = "5"
+        "#,
+    );
+
+    let report = compare_parquet(&within_five, &[left], &[right]).unwrap();
+
+    assert_eq!(report.verdict, Verdict::Pass);
+    assert_eq!(row_counts(&report).changed_rows, 0);
+    assert!(
+        report
+            .rows
+            .as_ref()
+            .unwrap()
+            .columns
+            .contains(&ColumnResult::Compared {
+                column: "balance".to_string(),
+                mismatches: 0,
+                tolerance: Some("5".to_string()),
+                within_tolerance: 1,
+            })
+    );
+    // Fingerprints are exact: 200 and 203 are different numbers.
+    assert!(!report.fingerprints.unwrap().content_matches);
+}
+
+#[test]
+fn a_difference_beyond_tolerance_fails() {
+    let left = write_parquet(
+        "beyond_left.parquet",
+        &accounts(&[(Some(1), Some("ann"), Some(100))]),
+    );
+    let right = write_parquet(
+        "beyond_right.parquet",
+        &accounts(&[(Some(1), Some("ann"), Some(106))]),
+    );
+    let within_five = config(
+        "[comparison]\nkeys = [\"id\"]\n[[tolerances]]\ncolumn = \"balance\"\nmax_difference = \"5\"\n",
+    );
+
+    let report = compare_parquet(&within_five, &[left], &[right]).unwrap();
+
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_eq!(row_counts(&report).changed_rows, 1);
+}
+
+#[test]
+fn equal_content_in_a_different_row_order_has_matching_fingerprints() {
+    let rows = [
+        (Some(1), Some("ann"), Some(100)),
+        (Some(2), Some("bob"), None),
+    ];
+    let mut reversed = rows;
+    reversed.reverse();
+    let left = write_parquet("fingerprint_left.parquet", &accounts(&rows));
+    let right = write_parquet("fingerprint_right.parquet", &accounts(&reversed));
+
+    let report = compare_parquet(&config(KEYED_ON_ID), &[left], &[right]).unwrap();
+    let fingerprints = report.fingerprints.unwrap();
+
+    assert!(fingerprints.content_matches);
+    assert_eq!(fingerprints.left.schema, fingerprints.right.schema);
+}
+
+#[test]
+fn composed_and_decomposed_accents_differ_unless_nfc_is_switched_on() {
+    // The same visible name, "zoé", stored with two different code point
+    // sequences.
+    let left = write_parquet(
+        "unicode_left.parquet",
+        &accounts(&[(Some(1), Some("zo\u{00e9}"), Some(100))]),
+    );
+    let right = write_parquet(
+        "unicode_right.parquet",
+        &accounts(&[(Some(1), Some("zoe\u{0301}"), Some(100))]),
+    );
+    let with_nfc = config("[comparison]\nkeys = [\"id\"]\n[normalization]\nunicode = \"nfc\"\n");
+
+    let exact = compare_parquet(
+        &config(KEYED_ON_ID),
+        std::slice::from_ref(&left),
+        std::slice::from_ref(&right),
+    )
+    .unwrap();
+    let normalized = compare_parquet(&with_nfc, &[left], &[right]).unwrap();
+
+    assert_eq!(row_counts(&exact).changed_rows, 1);
+    assert_eq!(normalized.verdict, Verdict::Pass);
+    assert!(normalized.fingerprints.unwrap().content_matches);
 }

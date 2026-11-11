@@ -19,3 +19,8 @@ Rows: INCONCLUSIVE (keys: id)
 
 Columns:
   `opens_at`: not compared, the left type Time64(µs) is not supported yet
+
+Fingerprints: MATCH (blake3, canonical version 1)
+  A screening signal over the key and compared columns, not a verdict.
+  left content   a7f70aaa61e93105f1a1344db06baee12a097517019168c3ab10cd7f355b5799
+  right content  a7f70aaa61e93105f1a1344db06baee12a097517019168c3ab10cd7f355b5799

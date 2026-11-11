@@ -19,6 +19,20 @@ schema_policy = "compatible"
 left = "trade_amt"
 right = "trade_amount"
 
+# Opt-in rules applied to every value before comparing. Both defaults leave
+# the data untouched.
+[normalization]
+unicode = "none"                 # none | nfc
+naive_timestamps = "distinct"    # distinct | assume_utc
+
+# Numbers in a column may differ by up to this amount and still count as
+# equal. Written as a string so no precision is lost. Uncomment to try it:
+# trade 1002 differs by 0.10 and would then no longer be a changed row.
+#
+# [[tolerances]]
+# column = "trade_amount"
+# max_difference = "0.10"
+
 # Every setting below shows its default, which is always the strict choice.
 [policy]
 fail_on_missing_keys = true      # a key exists only on the left

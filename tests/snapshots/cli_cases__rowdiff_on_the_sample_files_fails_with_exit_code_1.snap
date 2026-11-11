@@ -29,3 +29,8 @@ Columns:
   `price`: not compared, the left side is a decimal and the right side is a float; comparing them needs an explicit rule
   `quantity`: 0 mismatch(es)
   `trade_amount`: 1 mismatch(es)
+
+Fingerprints: DIFFERENT (blake3, canonical version 1)
+  A screening signal over the key and compared columns, not a verdict.
+  left content   a59bcf738a7f7315e1a1b666a8e919d4c31898f806a3de2c67432f8715b6f860
+  right content  f89afc7092b98170418fe4ff13428ba2ced54cebac7b6cf61b5529ba11af4eab

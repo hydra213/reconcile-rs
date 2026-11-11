@@ -6,8 +6,9 @@ ReconcileRS is a Rust library and command-line tool that compares two
 datasets and explains, with evidence, how they differ. It is deterministic:
 the same inputs and policy always produce the same report, byte for byte.
 
-**Status:** early development. Schema comparison and keyed row comparison
-work today. Fingerprints, tolerances and Markdown reports are next.
+**Status:** early development. Schema comparison, keyed row comparison,
+tolerances and fingerprints work today. Sample keys and Markdown reports are
+next.
 
 ## Try it
 
@@ -72,6 +73,10 @@ schema_policy = "compatible"
 left = "trade_amt"
 right = "trade_amount"
 
+[[tolerances]]
+column = "trade_amount"
+max_difference = "0.01"
+
 [policy]
 fail_on_extra_keys = false
 ```
@@ -90,6 +95,25 @@ Cells are compared as logical values, not as stored bytes: `Int32` 7 equals
 never coerced. A column that is a decimal on one side and a float on the
 other is reported as **inconclusive**, not guessed at. The full rules are in
 [ADR 0002](docs/adr/0002-keys-logical-values-and-row-comparison.md).
+
+### Tolerances and normalisation
+
+Everything is exact unless the configuration says otherwise.
+
+- `[[tolerances]]` lets the numbers in one column differ by up to a fixed
+  amount. Tolerated differences are still counted in the report.
+- `[normalization] unicode = "nfc"` treats differently encoded accents as
+  the same text.
+- `[normalization] naive_timestamps = "assume_utc"` lets timestamps without
+  a time zone be compared with timestamps that have one.
+
+### Fingerprints
+
+Each report includes BLAKE3 fingerprints of both sides' content and schema,
+and of the configuration. Content fingerprints do not depend on row order.
+They are a quick signal that two datasets agree, never a verdict: they are
+exact, so two values inside a tolerance still give different fingerprints.
+See [ADR 0003](docs/adr/0003-canonical-encoding-fingerprints-and-tolerances.md).
 
 ### Exit codes
 
@@ -126,8 +150,12 @@ Each module has one job. `src/lib.rs` runs them in this order:
 | `schema` | Describe schemas and list the facts that differ. |
 | `plan` | Check the configuration against the schemas and decide which columns are keys, compared or not comparable. |
 | `value` | Convert Arrow cells to logical values that can be compared. |
+| `normalize` | Apply opt-in rules (Unicode, naive timestamps) to values. |
 | `table` | Hold one side's values in memory. |
+| `tolerance` | Decide whether two numbers are close enough. |
 | `rowdiff` | Pair rows by key and list the facts that differ. |
+| `canonical` | Define the exact bytes of a value, for hashing. |
+| `fingerprint` | Hash files, schemas and table content. |
 | `policy` | Turn facts into verdicts. Every verdict names the rule or check that produced it. |
 | `report` | Assemble facts and verdicts into deterministic JSON and text. |
 | `main.rs` | The CLI: parse arguments, call the library, pick an exit code. |

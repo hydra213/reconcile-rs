@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use arrow::record_batch::RecordBatch;
 
+use crate::normalize::Normalization;
 use crate::value::{Value, column_values};
 
 /// The columns needed for a comparison, converted to [`Value`]s and stored
@@ -27,14 +28,19 @@ pub struct ColumnToLoad {
 }
 
 impl Table {
-    /// Converts the requested columns of `batches` into a table.
+    /// Converts the requested columns of `batches` into a table, applying
+    /// `normalization` to every value.
     ///
     /// # Panics
     ///
     /// Panics if a requested column is missing or has an unsupported type.
     /// The comparison plan rules both out before any data is loaded, so a
     /// panic here is a bug in this crate, not a problem with the data.
-    pub fn load(batches: &[RecordBatch], columns_to_load: &[ColumnToLoad]) -> Self {
+    pub fn load(
+        batches: &[RecordBatch],
+        columns_to_load: &[ColumnToLoad],
+        normalization: &Normalization,
+    ) -> Self {
         let row_count = batches.iter().map(RecordBatch::num_rows).sum();
 
         let mut columns = BTreeMap::new();
@@ -46,7 +52,11 @@ impl Table {
                     .expect("the plan only loads columns that exist");
                 let batch_values = column_values(array.as_ref())
                     .expect("the plan only loads columns with a supported type");
-                values.extend(batch_values);
+                values.extend(
+                    batch_values
+                        .into_iter()
+                        .map(|value| normalization.apply(value)),
+                );
             }
             columns.insert(column.logical_name.clone(), values);
         }
@@ -75,6 +85,11 @@ impl Table {
 
     pub fn row_count(&self) -> usize {
         self.row_count
+    }
+
+    /// The names of all columns, sorted.
+    pub fn column_names(&self) -> Vec<&str> {
+        self.columns.keys().map(String::as_str).collect()
     }
 
     /// All values of one column, in row order.
