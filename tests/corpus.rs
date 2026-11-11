@@ -2,7 +2,7 @@
 //!
 //! Each test is one numbered case with a known right answer. Together they
 //! describe what the engine promises. Every case goes through real Parquet
-//! files and the public `compare_parquet` function.
+//! files and the public `compare` function.
 //!
 //! Finer-grained tests of each rule live next to the code in `src/`.
 
@@ -16,12 +16,11 @@ use arrow::array::{
 };
 use arrow::datatypes::Int32Type;
 use arrow::record_batch::RecordBatch;
-use common::{batch, write_parquet, write_parquet_in_row_groups};
+use common::{batch, compare_files, read_files, write_parquet, write_parquet_in_row_groups};
+use reconcilers::Config;
 use reconcilers::fingerprint::Fingerprint;
-use reconcilers::parquet_input::read_dataset;
 use reconcilers::policy::{RowCheck, SchemaRule, Verdict};
 use reconcilers::report::{ColumnResult, Report, RowSection, SchemaSection};
-use reconcilers::{Config, compare_parquet};
 
 const KEYED_ON_ID: &str = "[comparison]\nkeys = [\"id\"]\n";
 
@@ -64,9 +63,7 @@ fn compare(case: &str, config: &str, left: &RecordBatch, right: &RecordBatch) ->
     let right = write_parquet(&format!("corpus_{case}_right.parquet"), right);
     let config = Config::from_toml_str(config).expect("the case's configuration should be valid");
 
-    compare_parquet(&config, &[left], &[right])
-        .expect("the comparison should run")
-        .report
+    compare_files(&config, &[left], &[right]).expect("the comparison should run")
 }
 
 fn schema(report: &Report) -> &SchemaSection {
@@ -450,7 +447,8 @@ fn case_14_file_mutated_after_it_was_read() {
 
     let path = write_parquet("corpus_14.parquet", &original);
     let bytes_before = std::fs::read(&path).unwrap();
-    let dataset = read_dataset(std::slice::from_ref(&path)).unwrap();
+    let config = Config::from_toml_str(KEYED_ON_ID).unwrap();
+    let dataset = read_files(&config, std::slice::from_ref(&path)).unwrap();
 
     write_parquet("corpus_14.parquet", &replacement);
     let bytes_after = std::fs::read(&path).unwrap();
@@ -487,9 +485,7 @@ fn case_15_large_keys_long_strings_and_many_row_groups() {
     let many_groups = write_parquet_in_row_groups("corpus_15_many_groups.parquet", &table, 64);
     let config = Config::from_toml_str(KEYED_ON_ID).unwrap();
 
-    let report = compare_parquet(&config, &[one_group], &[many_groups])
-        .unwrap()
-        .report;
+    let report = compare_files(&config, &[one_group], &[many_groups]).unwrap();
 
     assert_eq!(report.verdict, Verdict::Pass);
     assert_eq!(rows(&report).counts.unchanged_rows, ROWS as u64);

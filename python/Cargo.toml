@@ -1,0 +1,20 @@
+[package]
+name = "reconcilers-python"
+version = "0.1.0"
+edition = "2024"
+description = "Python bindings for ReconcileRS."
+license = "MIT"
+publish = false
+
+# The compiled module is imported in Python as `reconcilers._native`.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+reconcilers = { path = ".." }
+# `abi3-py39` builds one wheel that works on every Python from 3.9 on.
+pyo3 = { version = "0.30", features = ["abi3-py39"] }
+# Receives Arrow data from Python (pyarrow, Polars, pandas, ...) without
+# copying it. Must use the same Arrow major version as `reconcilers`.
+pyo3-arrow = { version = "0.21", default-features = false }

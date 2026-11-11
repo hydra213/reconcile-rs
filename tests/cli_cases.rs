@@ -289,3 +289,33 @@ fn rowdiff_command_writes_findings_without_a_schema_section() {
     assert!(!findings.contains("\"fingerprints\""));
     assert!(read(dir.join("run.json")).contains("\"command\": \"rowdiff\""));
 }
+
+#[test]
+fn compare_reads_csv_files_with_the_types_from_the_config() {
+    let folder = out_dir("cli_csv");
+    std::fs::create_dir_all(&folder).expect("the scratch folder should be creatable");
+    let write = |name: &str, text: &str| {
+        let path = folder.join(name);
+        std::fs::write(&path, text).expect("the file should be writable");
+        path.to_str()
+            .expect("the temp path should be UTF-8")
+            .to_string()
+    };
+    let left = write("left.csv", "id,amount\n1,10.50\n2,20.00\n");
+    let right = write("right.csv", "id,amount\n1,10.50\n2,20.01\n");
+    let config = write(
+        "csv.toml",
+        "[comparison]\nkeys = [\"id\"]\n[csv.types]\nid = \"int64\"\namount = \"decimal(18, 2)\"\n\
+         [[tolerances]]\ncolumn = \"amount\"\nmax_difference = \"0.01\"\n",
+    );
+
+    let output = reconcilers(&[
+        "compare", "--left", &left, "--right", &right, "--config", &config,
+    ]);
+    let text = stdout(&output);
+
+    // 20.00 and 20.01 are within the tolerance, which only works because
+    // `amount` was read as a decimal and not as text.
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    assert!(text.contains("`amount`: 0 mismatch(es), 1 more within the tolerance of 0.01"));
+}

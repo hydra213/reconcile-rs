@@ -57,7 +57,7 @@ because two identical rows cancel out.
 
 A report must be byte-identical when a file is rewritten with its rows in a
 different order. A digest of the file bytes would break that, so the report
-carries only order-independent fingerprints. `parquet_input::Dataset` still
+carries only order-independent fingerprints. `dataset::Dataset` still
 exposes the per-file digests for run metadata.
 
 Each input file is read from disk exactly once; its digest and its rows come

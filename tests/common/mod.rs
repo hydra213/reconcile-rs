@@ -12,6 +12,8 @@ use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+use reconcilers::report::Report;
+use reconcilers::{Config, Dataset, Error};
 
 /// A row of the small `accounts` table used in tests: `(id, owner, balance)`.
 /// `None` is NULL.
@@ -104,4 +106,39 @@ fn write_parquet_with_properties(
     writer.write(batch).expect("the batch should be written");
     writer.close().expect("the file should be finished");
     path
+}
+
+/// Reads a dataset from files, with the CSV settings of `config`.
+pub fn read_files(config: &Config, paths: &[PathBuf]) -> Result<Dataset, Error> {
+    let locations: Vec<String> = paths
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    reconcilers::input::read_dataset(&locations, &config.csv)
+}
+
+/// Reads both sides from files and runs the full comparison.
+pub fn compare_files(
+    config: &Config,
+    left: &[PathBuf],
+    right: &[PathBuf],
+) -> Result<Report, Error> {
+    reconcilers::compare(
+        config,
+        &read_files(config, left)?,
+        &read_files(config, right)?,
+    )
+}
+
+/// Reads both sides from files and compares the rows only.
+pub fn compare_rows_of_files(
+    config: &Config,
+    left: &[PathBuf],
+    right: &[PathBuf],
+) -> Result<Report, Error> {
+    reconcilers::compare_rows(
+        config,
+        &read_files(config, left)?,
+        &read_files(config, right)?,
+    )
 }

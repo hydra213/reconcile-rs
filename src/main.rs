@@ -11,11 +11,11 @@ use std::time::Instant;
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 
-use reconcilers::parquet_input::InputFile;
+use reconcilers::config::CsvConfig;
 use reconcilers::policy::{SchemaPolicy, Verdict};
 use reconcilers::report::Report;
 use reconcilers::run::{RunFile, RunMetadata, TOOL_VERSION};
-use reconcilers::{Config, Reconciliation};
+use reconcilers::{Config, Dataset, input};
 
 /// Exit code when the comparison ran and the policy holds.
 const EXIT_PASS: u8 = 0;
@@ -31,7 +31,7 @@ const EXIT_INCONCLUSIVE: u8 = 3;
 #[command(
     name = "reconcilers",
     version,
-    about = "Deterministic data reconciliation for Parquet datasets"
+    about = "Deterministic data reconciliation for Parquet and CSV datasets"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -40,9 +40,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Compare the schemas of two Parquet datasets.
+    /// Compare the schemas of two datasets.
     Schema(SchemaArgs),
-    /// Compare the rows of two Parquet datasets by key. Schemas are not judged.
+    /// Compare the rows of two datasets by key. Schemas are not judged.
     Rowdiff(ConfiguredArgs),
     /// Run the full reconciliation: schemas, rows and fingerprints.
     Compare(ConfiguredArgs),
@@ -72,13 +72,15 @@ struct ConfiguredArgs {
 /// The arguments every comparison command shares.
 #[derive(clap::Args)]
 struct DatasetArgs {
-    /// The baseline: one or more Parquet files with the same schema.
+    /// The baseline: one or more Parquet or CSV files with the same schema.
+    /// Each can be a file, a folder of files, or an object storage URL
+    /// such as `s3://bucket/trades/`.
     #[arg(long, required = true, num_args = 1..)]
-    left: Vec<PathBuf>,
+    left: Vec<String>,
 
-    /// The candidate: one or more Parquet files with the same schema.
+    /// The candidate, given in the same way as the baseline.
     #[arg(long, required = true, num_args = 1..)]
-    right: Vec<PathBuf>,
+    right: Vec<String>,
 
     /// Write `findings.json`, `report.md` and `run.json` to this directory.
     /// The directory is created if it does not exist.
@@ -165,14 +167,21 @@ fn finish(
 
 fn run_schema(args: SchemaArgs) -> anyhow::Result<Outcome> {
     let SchemaArgs { datasets, policy } = args;
+    let failed = "schema comparison could not run";
 
-    let report =
-        reconcilers::compare_parquet_schemas(&datasets.left, &datasets.right, policy.into())
-            .context("schema comparison could not run")?;
+    // The schema command takes no configuration file, so CSV files are read
+    // with the default settings: every column is text.
+    let csv = CsvConfig::default();
+    let left = input::read_schema(&datasets.left, &csv).context(failed)?;
+    let right = input::read_schema(&datasets.right, &csv).context(failed)?;
+    let report = reconcilers::compare_schemas(&left, &right, policy.into());
 
-    // Only the file footers were read, so there are no sizes or fingerprints.
-    let paths_only =
-        |paths: &[PathBuf]| paths.iter().map(|path| RunFile::path_only(path)).collect();
+    let paths_only = |locations: &[String]| {
+        locations
+            .iter()
+            .map(|location| RunFile::path_only(location))
+            .collect()
+    };
     Ok(Outcome {
         report,
         command: "schema",
@@ -184,51 +193,51 @@ fn run_schema(args: SchemaArgs) -> anyhow::Result<Outcome> {
 }
 
 fn run_rowdiff(args: ConfiguredArgs) -> anyhow::Result<Outcome> {
-    let ConfiguredArgs { datasets, config } = args;
+    let failed = "row comparison could not run";
+    let inputs = Inputs::read(&args).context(failed)?;
 
-    let settings = Config::from_toml_file(&config).context("row comparison could not run")?;
-    let reconciliation =
-        reconcilers::compare_parquet_rows(&settings, &datasets.left, &datasets.right)
-            .context("row comparison could not run")?;
-
-    Ok(outcome_with_config(
-        "rowdiff",
-        reconciliation,
-        config,
-        datasets.out_dir,
-    ))
+    let report =
+        reconcilers::compare_rows(&inputs.config, &inputs.left, &inputs.right).context(failed)?;
+    Ok(inputs.into_outcome("rowdiff", report, args))
 }
 
 fn run_compare(args: ConfiguredArgs) -> anyhow::Result<Outcome> {
-    let ConfiguredArgs { datasets, config } = args;
+    let failed = "comparison could not run";
+    let inputs = Inputs::read(&args).context(failed)?;
 
-    let settings = Config::from_toml_file(&config).context("comparison could not run")?;
-    let reconciliation = reconcilers::compare_parquet(&settings, &datasets.left, &datasets.right)
-        .context("comparison could not run")?;
-
-    Ok(outcome_with_config(
-        "compare",
-        reconciliation,
-        config,
-        datasets.out_dir,
-    ))
+    let report =
+        reconcilers::compare(&inputs.config, &inputs.left, &inputs.right).context(failed)?;
+    Ok(inputs.into_outcome("compare", report, args))
 }
 
-/// The outcome of a command that read a configuration file and whole files.
-fn outcome_with_config(
-    command: &'static str,
-    reconciliation: Reconciliation,
-    config_file: PathBuf,
-    out_dir: Option<PathBuf>,
-) -> Outcome {
-    let run_files = |files: &[InputFile]| files.iter().map(RunFile::from).collect();
-    Outcome {
-        command,
-        config_file: Some(config_file),
-        left_files: run_files(&reconciliation.left_files),
-        right_files: run_files(&reconciliation.right_files),
-        report: reconciliation.report,
-        out_dir,
+/// What `rowdiff` and `compare` read before they compare anything.
+struct Inputs {
+    config: Config,
+    left: Dataset,
+    right: Dataset,
+}
+
+impl Inputs {
+    fn read(args: &ConfiguredArgs) -> Result<Self, reconcilers::Error> {
+        let config = Config::from_toml_file(&args.config)?;
+        let left = input::read_dataset(&args.datasets.left, &config.csv)?;
+        let right = input::read_dataset(&args.datasets.right, &config.csv)?;
+        Ok(Self {
+            config,
+            left,
+            right,
+        })
+    }
+
+    fn into_outcome(self, command: &'static str, report: Report, args: ConfiguredArgs) -> Outcome {
+        Outcome {
+            report,
+            command,
+            config_file: Some(args.config),
+            left_files: self.left.files.iter().map(RunFile::from).collect(),
+            right_files: self.right.files.iter().map(RunFile::from).collect(),
+            out_dir: args.datasets.out_dir,
+        }
     }
 }
 

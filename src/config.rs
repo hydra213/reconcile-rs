@@ -4,7 +4,7 @@
 //! data, such as an empty key list. Checks that need the schemas, such as
 //! "does the key column exist", happen in [`crate::plan`].
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
@@ -34,6 +34,9 @@ pub struct Config {
     pub policy: RowPolicy,
     #[serde(default)]
     pub report: ReportConfig,
+    /// How CSV files are read. Has no effect on other inputs.
+    #[serde(default)]
+    pub csv: CsvConfig,
 }
 
 /// The `[comparison]` section.
@@ -85,6 +88,56 @@ pub struct ReportConfig {
     pub show_values: bool,
 }
 
+/// The `[csv]` section: how CSV files are read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CsvConfig {
+    /// The single character between two values. A comma by default.
+    pub delimiter: String,
+    /// The values that mean NULL, in a column of any type. By default only
+    /// the empty value.
+    pub null_values: Vec<String>,
+    /// The type of each column that is not text, by the column's name in
+    /// the file. The type names are listed at [`crate::input::csv::parse_type`].
+    /// A column that is not named here is read as text.
+    pub types: BTreeMap<String, String>,
+}
+
+impl Default for CsvConfig {
+    fn default() -> Self {
+        Self {
+            delimiter: ",".to_string(),
+            null_values: vec![String::new()],
+            types: BTreeMap::new(),
+        }
+    }
+}
+
+impl CsvConfig {
+    /// The delimiter as the single byte the CSV reader needs.
+    /// [`Config::validate`] has checked that it is exactly one byte.
+    pub fn delimiter_byte(&self) -> u8 {
+        self.delimiter.as_bytes()[0]
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.delimiter.len() != 1 {
+            return Err(ConfigError::InvalidCsvDelimiter {
+                delimiter: self.delimiter.clone(),
+            });
+        }
+        for (column, type_name) in &self.types {
+            if crate::input::csv::parse_type(type_name).is_none() {
+                return Err(ConfigError::UnknownCsvType {
+                    column: column.clone(),
+                    type_name: type_name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Default for ReportConfig {
     fn default() -> Self {
         Self {
@@ -109,6 +162,18 @@ impl Config {
         let config: Self = toml::from_str(text).map_err(|source| Error::ParseConfig {
             source: Box::new(source),
         })?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Parses and validates configuration written as JSON.
+    ///
+    /// The JSON has the same sections and settings as the TOML file. This is
+    /// how programs that build a configuration in code, such as the Python
+    /// package, hand it over.
+    pub fn from_json_str(text: &str) -> Result<Self, Error> {
+        let config: Self =
+            serde_json::from_str(text).map_err(|source| Error::ParseConfigJson { source })?;
         config.validate()?;
         Ok(config)
     }
@@ -149,7 +214,7 @@ impl Config {
                 });
             }
         }
-        Ok(())
+        self.csv.validate()
     }
 
     /// A fingerprint of every setting, recorded in reports so that a report
@@ -231,6 +296,14 @@ pub enum ConfigError {
         left_kind: String,
         right_kind: String,
     },
+
+    #[error("the CSV delimiter is `{delimiter}`, but it must be exactly one character such as `,`")]
+    InvalidCsvDelimiter { delimiter: String },
+
+    #[error(
+        "`csv.types` gives column `{column}` the type `{type_name}`, which is not a known type name such as `int64` or `decimal(18, 2)`"
+    )]
+    UnknownCsvType { column: String, type_name: String },
 
     #[error("column `{column}` has more than one tolerance")]
     RepeatedTolerance { column: String },
@@ -373,6 +446,80 @@ mod tests {
         assert_eq!(example.policy, RowPolicy::default());
         assert_eq!(example.report, ReportConfig::default());
         assert_eq!(example.normalization, Normalization::default());
+        assert_eq!(example.csv, CsvConfig::default());
+    }
+
+    #[test]
+    fn json_and_toml_give_the_same_configuration() {
+        let from_toml = Config::from_toml_str(
+            "[comparison]\nkeys = [\"id\"]\n[[tolerances]]\ncolumn = \"amount\"\nmax_difference = \"0.01\"\n",
+        )
+        .unwrap();
+        let from_json = Config::from_json_str(
+            r#"{
+                "comparison": {"keys": ["id"]},
+                "tolerances": [{"column": "amount", "max_difference": "0.01"}]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(from_json, from_toml);
+    }
+
+    #[test]
+    fn json_is_checked_as_strictly_as_toml() {
+        let unknown_setting =
+            Config::from_json_str(r#"{"comparison": {"keys": ["id"]}, "typo": 1}"#);
+        assert!(matches!(
+            unknown_setting,
+            Err(Error::ParseConfigJson { .. })
+        ));
+
+        let no_keys = Config::from_json_str(r#"{"comparison": {"keys": []}}"#);
+        assert!(matches!(no_keys, Err(Error::Config(ConfigError::NoKeys))));
+    }
+
+    #[test]
+    fn csv_settings_have_defaults_and_can_be_changed() {
+        let defaults = Config::from_toml_str("[comparison]\nkeys = [\"id\"]\n").unwrap();
+        assert_eq!(defaults.csv, CsvConfig::default());
+        assert_eq!(defaults.csv.delimiter_byte(), b',');
+
+        let changed = Config::from_toml_str(
+            r#"
+            [comparison]
+            keys = ["id"]
+
+            [csv]
+            delimiter = ";"
+            null_values = ["", "NULL"]
+
+            [csv.types]
+            id = "int64"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(changed.csv.delimiter_byte(), b';');
+        assert_eq!(changed.csv.null_values, vec!["", "NULL"]);
+        assert_eq!(changed.csv.types["id"], "int64");
+    }
+
+    #[test]
+    fn invalid_csv_settings_are_rejected() {
+        let long_delimiter =
+            Config::from_toml_str("[comparison]\nkeys = [\"id\"]\n[csv]\ndelimiter = \"||\"\n");
+        assert!(matches!(
+            long_delimiter,
+            Err(Error::Config(ConfigError::InvalidCsvDelimiter { .. }))
+        ));
+
+        let unknown_type =
+            Config::from_toml_str("[comparison]\nkeys = [\"id\"]\n[csv.types]\nid = \"integer\"\n");
+        assert!(matches!(
+            unknown_type,
+            Err(Error::Config(ConfigError::UnknownCsvType { column, type_name }))
+                if column == "id" && type_name == "integer"
+        ));
     }
 
     #[test]

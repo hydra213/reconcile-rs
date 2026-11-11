@@ -1,3 +1,11 @@
 /target
 *.snap.new
 /artifacts
+/out
+
+# Python package build output
+__pycache__/
+.pytest_cache/
+.venv/
+/python/reconcilers/*.so
+/python/reconcilers/*.pyd

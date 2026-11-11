@@ -249,7 +249,7 @@ expression: findings
       "unicode": "none",
       "naive_timestamps": "distinct"
     },
-    "configuration": "ce926d1a6b245a85865e7c9d87f545e1b79579a3c2c105e9ad5b51dafd03de4f",
+    "configuration": "eec35dffc00675bd4ad55e926a2677a457f3b0c9e815c74f1e39391f77aba519",
     "left": {
       "schema": "4ad4ee434d9b6ff51b8f34a170123d8c7d066d4a77a7eeb0e5accb1a8855567e",
       "content": "a59bcf738a7f7315e1a1b666a8e919d4c31898f806a3de2c67432f8715b6f860"

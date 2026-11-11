@@ -2,9 +2,11 @@
 
 > Trust the migration, not the row count.
 
-ReconcileRS is a Rust library and command-line tool that compares two
-Parquet datasets and explains, with evidence, how they differ. It answers
-three questions separately:
+ReconcileRS is a Rust library, a command-line tool and a Python package
+that compares two datasets and explains, with evidence, how they differ.
+Each side can be Parquet or CSV files, on disk or in object storage (S3,
+ADLS Gen2, GCS), or, from Python, a dataframe (pandas, Polars, PySpark,
+pyarrow). It answers three questions separately:
 
 1. **Structure.** Did the schema change, and is the change acceptable?
 2. **Completeness.** Which keys are missing, extra, duplicated or NULL?
@@ -14,7 +16,7 @@ Every answer comes with the rule that produced it and one of four verdicts:
 **pass**, **warn**, **inconclusive** or **fail**. The same data and
 configuration always produce the same report, byte for byte.
 
-**Status:** v0.1. Local Parquet files, compared in memory.
+**Status:** v0.1. Files and dataframes, compared in memory.
 
 ## Try it
 
@@ -70,23 +72,81 @@ Fingerprints: DIFFERENT (blake3, canonical version 1)
 ```
 
 The left dataset is the baseline and the right dataset is the candidate.
-Each side can be several Parquet files with the same schema:
-`--left part-0.parquet part-1.parquet`.
 
 What the sample files contain, and why this is the right answer for them, is
 written down in [`tests/fixtures/README.md`](tests/fixtures/README.md).
+
+## Inputs
+
+Each of `--left` and `--right` takes one or more locations. All files of one
+side must have the same schema; their rows together form the dataset.
+
+| Location | What is read |
+|---|---|
+| `data/trades.parquet` | One file. |
+| `part-0.parquet part-1.parquet` | Several files as one dataset. |
+| `data/trades/` | Every `.parquet` and `.csv` file directly inside the folder. Marker files such as `_SUCCESS` are skipped, and sub-folders are not searched. |
+| `s3://bucket/trades.parquet` | One object in object storage. |
+| `s3://bucket/trades/` | Every data file directly under the prefix. The URL must end with `/`. |
+
+A file whose name ends in `.csv` is read as CSV. Every other file is read
+as Parquet. The two sides can be of different formats.
+
+**Object storage.** `s3://`, `abfss://`, `az://` and `gs://` URLs are read
+with the Arrow project's `object_store` crate. Credentials come from the
+environment variables each cloud uses, for example `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY` and `AWS_REGION`, `AZURE_STORAGE_ACCOUNT_NAME` and
+`AZURE_STORAGE_ACCOUNT_KEY`, or `GOOGLE_SERVICE_ACCOUNT`. On a cloud machine
+with an attached role or managed identity nothing needs to be set.
+
+```bash
+reconcilers compare \
+  --left incoming/trades.csv \
+  --right s3://lake/landing/trades/load_date=2026-11-11/ \
+  --config reconcile.toml
+```
+
+A Delta table must not be read this way. Its folder also holds files that
+the table no longer uses, so query the table and compare the result from
+Python instead.
+
+**CSV.** A CSV file has column names but no types, and ReconcileRS never
+guesses one. A column is text unless its type is declared in the
+configuration, by the column's name in the file:
+
+```toml
+[csv]
+delimiter = ","          # default
+null_values = [""]       # default: an empty value is NULL
+
+[csv.types]
+trade_id = "int64"
+trade_amount = "decimal(18, 2)"
+business_date = "date"
+booked_at = "timestamp[us, UTC]"
+```
+
+The type names are `string`, `bool`, `int8` to `int64`, `uint8` to `uint64`,
+`float32`, `float64`, `decimal(precision, scale)`, `date`,
+`timestamp[s|ms|us|ns]` and `timestamp[unit, zone]`. The first row must hold
+the column names. A value that does not fit its declared type stops the run
+with exit code 2 and an error that names the line. Text is not silently
+compared with numbers: an undeclared CSV column compared with a typed
+column is reported as inconclusive.
+
+The `schema` command takes no configuration, so it sees every CSV column as
+text. Use `compare` to judge a CSV schema with its declared types.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `reconcilers schema` | Compares schemas only. Reads file footers, no rows. |
+| `reconcilers schema` | Compares schemas only. No rows are decoded. |
 | `reconcilers rowdiff` | Compares rows only. Pairs rows by key and compares their values. Schemas are read to find the comparable columns, but not judged. |
 | `reconcilers compare` | The full reconciliation: the schema check, the row check and fingerprints, with one overall verdict. |
 
-Each command maps to one library function: `compare_parquet_schemas`,
-`compare_parquet_rows` and `compare_parquet`. Run any of them with `--help`
-for its options.
+Each command maps to one library function: `compare_schemas`,
+`compare_rows` and `compare`. Run any of them with `--help` for its options.
 
 ### Output files
 
@@ -109,9 +169,10 @@ Every command prints a summary. With `--out-dir <directory>` they also write:
 
 ## Configuration
 
-`rowdiff` and `compare` read a TOML file. Only `keys` is required. Every other setting
-defaults to the strict choice, and unknown settings are rejected.
-[`examples/reconcile.toml`](examples/reconcile.toml) lists every setting.
+`rowdiff` and `compare` read a TOML file. Only `keys` is required. Every
+other setting defaults to the strict choice, and unknown settings are
+rejected. [`examples/reconcile.toml`](examples/reconcile.toml) lists every
+setting. The `[csv]` section is described under [Inputs](#inputs).
 
 ```toml
 [comparison]
@@ -185,36 +246,64 @@ The reasoning behind each of these is in [`docs/adr/`](docs/adr/):
 - [0002](docs/adr/0002-keys-logical-values-and-row-comparison.md): keys, logical values and row comparison
 - [0003](docs/adr/0003-canonical-encoding-fingerprints-and-tolerances.md): canonical encoding, fingerprints and tolerances
 - [0004](docs/adr/0004-reports-run-metadata-and-redaction.md): reports, run metadata and redaction
+- [0005](docs/adr/0005-in-memory-datasets-and-python-bindings.md): in-memory datasets and the Python package
+- [0006](docs/adr/0006-file-inputs-object-storage-and-csv.md): folders, object storage and CSV
 
-## Use it as a library
+## Use it from Python
 
-```rust
-use std::path::{Path, PathBuf};
-use reconcilers::{Config, compare_parquet};
+The Python package compares files and dataframes with the same engine. It
+lives in [`python/`](python/), and [`python/README.md`](python/README.md)
+is its full guide.
 
-let config = Config::from_toml_file(Path::new("reconcile.toml"))?;
-let reconciliation = compare_parquet(
-    &config,
-    &[PathBuf::from("legacy.parquet")],
-    &[PathBuf::from("new.parquet")],
-)?;
+```python
+import reconcilers
 
-println!("{}", reconciliation.report.verdict);
-std::fs::write("findings.json", reconciliation.report.to_json())?;
+result = reconcilers.compare("legacy.parquet", new_dataframe, keys=["trade_id"])
+
+print(result)              # the report as text
+result.raise_if_failed()   # stop a pipeline on a failed reconciliation
 ```
 
-`compare_parquet` runs everything. To run one check on its own, call
-`compare_parquet_schemas` or `compare_parquet_rows` instead.
+`reconcilers.schema`, `reconcilers.rowdiff` and `reconcilers.compare` match
+the three commands. Each side can be a location (a file, a folder or an
+object storage URL), a list of locations, or a pandas, Polars, PySpark or
+pyarrow table, and the two sides can be of different kinds. That is how an incoming file is checked against a table in
+Snowflake or Databricks: query the rows to check, and pass the result.
+
+## Use it as a Rust library
+
+Reading and comparing are separate steps. Read each side into a `Dataset`,
+then compare the datasets.
+
+```rust
+use std::path::Path;
+use reconcilers::{Config, input};
+
+let config = Config::from_toml_file(Path::new("reconcile.toml"))?;
+let left = input::read_dataset(&["legacy.parquet".to_string()], &config.csv)?;
+let right = input::read_dataset(&["s3://lake/new/".to_string()], &config.csv)?;
+
+let report = reconcilers::compare(&config, &left, &right)?;
+
+println!("{}", report.verdict);
+std::fs::write("findings.json", report.to_json())?;
+```
+
+`compare` runs everything. To run one check on its own, call
+`compare_schemas` or `compare_rows` instead. Arrow data that is already in
+memory becomes a dataset with `Dataset::from_batches`, so any source that
+can produce Arrow record batches can be compared.
 
 ## How the code is organised
 
-Each module has one job. `compare_parquet` in `src/lib.rs` runs them in
-this order, so that file is the place to start reading.
+Each module has one job. `compare` in `src/lib.rs` runs them in this order,
+so that file is the place to start reading.
 
 | Module | Job |
 |---|---|
 | `config` | Load and check `reconcile.toml`. |
-| `parquet_input` | Read Parquet files from disk. |
+| `dataset` | Hold one side of a comparison in memory, from any source. |
+| `input` | Read files into a dataset. `input::fetch` finds the files and reads their bytes from disk or object storage; `input::parquet` and `input::csv` decode them. |
 | `schema` | Describe schemas and list the facts that differ. |
 | `plan` | Check the configuration against the schemas and decide which columns are keys, compared or not comparable. |
 | `value` | Convert Arrow cells to logical values that can be compared. |
@@ -228,6 +317,7 @@ this order, so that file is the place to start reading.
 | `report` | Assemble facts and verdicts into deterministic JSON, text and Markdown. |
 | `run` | Record what is specific to one run. |
 | `main.rs` | The CLI: parse arguments, call the library, write files, pick an exit code. |
+| `python/` | The Python package: a thin layer that passes files and dataframes to the library. |
 
 `schema` and `rowdiff` only report facts. `policy` is the only place where
 something is judged acceptable or not.
@@ -260,7 +350,9 @@ cargo run --example generate_fixtures  # regenerate tests/fixtures/*.parquet
 | `tests/corpus.rs` | Fifteen hand-labelled cases with a known right answer, through real Parquet files. |
 | `tests/properties.rs` | Rules that must hold for any data, checked on random tables. |
 | `tests/row_cases.rs`, `tests/schema_cases.rs` | Library behaviour and report snapshots. |
+| `tests/input_cases.rs` | Reading CSV files, folders and object storage URLs. |
 | `tests/cli_cases.rs` | The real binary: output, files and exit codes. |
+| `python/tests/` | The Python package, with files and with pandas, Polars, PySpark and pyarrow dataframes. |
 
 Snapshot tests use [insta](https://insta.rs). When a report changes on
 purpose, run `INSTA_UPDATE=always cargo test`, read the diff in
@@ -270,7 +362,18 @@ purpose, run `INSTA_UPDATE=always cargo test`, read the diff in
 
 - Both datasets are loaded into memory. There is no streaming or spilling
   to disk yet, and no benchmarks have been run.
-- Local Parquet files only. No database or cloud storage adapters.
+- Files are Parquet or CSV. There are no built-in database readers; a
+  warehouse table reaches the engine as Arrow, for example a query result
+  passed to the Python package.
+- Object storage has been tested through local `file://` URLs only, which
+  use the same code path. It has not been run against a real S3, Azure or
+  GCS account yet.
+- A file is always read whole, also by the `schema` command and also from
+  object storage.
+- CSV files need a header row, and every CSV file in one run shares the
+  same `[csv]` settings. Compressed CSV files are not read.
+- The Python package is built from source with maturin. No wheels are
+  published yet.
 - Nested types, time of day, `Date64`, `Decimal256`, `Float16`, dictionary
   and fixed-size binary columns are reported as inconclusive, not compared.
 - Columns are matched at the top level only.
@@ -281,3 +384,7 @@ purpose, run `INSTA_UPDATE=always cargo test`, read the diff in
   written together.
 - Results have not been cross-checked against an independent SQL
   implementation.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

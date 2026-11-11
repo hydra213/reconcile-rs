@@ -3,14 +3,19 @@
 //! The crate is organised as a pipeline. Each module has one job, and the
 //! three functions at the bottom of this file run the modules in order:
 //!
-//! - [`compare_parquet_schemas`] checks the schemas only.
-//! - [`compare_parquet_rows`] checks the rows only.
-//! - [`compare_parquet`] runs the full reconciliation.
+//! - [`compare_schemas`] checks the schemas only.
+//! - [`compare_rows`] checks the rows only.
+//! - [`compare`] runs the full reconciliation.
+//!
+//! All three work on data that is already in memory. Reading is a separate
+//! step: [`input`] reads Parquet and CSV files from disk or object storage,
+//! and [`Dataset::from_batches`] accepts Arrow data from any other source.
 //!
 //! | Module            | Job                                                          |
 //! |-------------------|--------------------------------------------------------------|
 //! | [`config`]        | Load and check `reconcile.toml`.                             |
-//! | [`parquet_input`] | Read Parquet files from disk.                                |
+//! | [`dataset`]       | Hold one side of a comparison in memory, from any source.    |
+//! | [`input`]         | Read Parquet and CSV files, local or remote, into a dataset. |
 //! | [`schema`]        | Describe schemas and list the *facts* that differ.           |
 //! | [`plan`]          | Decide which columns are keys, compared or not comparable.   |
 //! | [`value`]         | Convert Arrow cells to logical values that can be compared.  |
@@ -34,10 +39,11 @@
 
 pub mod canonical;
 pub mod config;
+pub mod dataset;
 pub mod error;
 pub mod fingerprint;
+pub mod input;
 pub mod normalize;
-pub mod parquet_input;
 pub mod plan;
 pub mod policy;
 pub mod report;
@@ -48,78 +54,42 @@ pub mod table;
 pub mod tolerance;
 pub mod value;
 
-use std::path::PathBuf;
-
 pub use config::Config;
+pub use dataset::Dataset;
 pub use error::Error;
 use fingerprint::Fingerprint;
-use parquet_input::InputFile;
 use plan::ComparisonPlan;
 use policy::SchemaPolicy;
 use report::{FingerprintSection, Report, RowSection, SchemaSection, SideFingerprints};
+use schema::LogicalSchema;
 use table::Table;
 
-/// Compares the schemas of two Parquet datasets.
+/// Compares two schemas and judges every difference under `policy`.
 ///
-/// Each side is one or more Parquet files. Only the file footers are read,
-/// so this is fast even for large files.
-pub fn compare_parquet_schemas(
-    left: &[PathBuf],
-    right: &[PathBuf],
+/// To compare the schemas of files without decoding their rows, get the
+/// schemas from [`input::read_schema`].
+pub fn compare_schemas(
+    left: &LogicalSchema,
+    right: &LogicalSchema,
     policy: SchemaPolicy,
-) -> Result<Report, Error> {
-    let left_schema = parquet_input::read_schema(left)?;
-    let right_schema = parquet_input::read_schema(right)?;
-
-    let schema_section = SchemaSection::new(&left_schema, &right_schema, policy);
-    Ok(Report::schema_only(schema_section))
+) -> Report {
+    Report::schema_only(SchemaSection::new(left, right, policy))
 }
 
-/// The result of [`compare_parquet_rows`] and [`compare_parquet`].
-#[derive(Debug, Clone)]
-pub struct Reconciliation {
-    /// The deterministic report: facts, verdicts and fingerprints.
-    pub report: Report,
-    /// The files that were read, with their sizes and fingerprints. Kept
-    /// outside the report because they depend on file layout and location.
-    pub left_files: Vec<InputFile>,
-    pub right_files: Vec<InputFile>,
-}
-
-/// Compares the rows of two Parquet datasets by key.
+/// Compares the rows of two datasets by key.
 ///
-/// The schemas are read, because they decide which columns can be compared,
+/// The schemas are used, because they decide which columns can be compared,
 /// but they are not judged: `schema_policy` in the configuration is ignored
-/// and the report has no schema section. Use [`compare_parquet`] to judge
-/// both.
-///
-/// Each side is one or more Parquet files. Both datasets are loaded into
-/// memory, so they must fit in RAM.
-pub fn compare_parquet_rows(
-    config: &Config,
-    left: &[PathBuf],
-    right: &[PathBuf],
-) -> Result<Reconciliation, Error> {
-    let compared = ComparedRows::load(config, left, right)?;
-
-    Ok(Reconciliation {
-        report: Report::rows_only(compared.row_section),
-        left_files: compared.left_files,
-        right_files: compared.right_files,
-    })
+/// and the report has no schema section. Use [`compare`] to judge both.
+pub fn compare_rows(config: &Config, left: &Dataset, right: &Dataset) -> Result<Report, Error> {
+    let compared = ComparedRows::new(config, left, right)?;
+    Ok(Report::rows_only(compared.row_section))
 }
 
-/// Compares two Parquet datasets in full: their schemas, their rows and
-/// their fingerprints, with one overall verdict.
-///
-/// Each side is one or more Parquet files. Both datasets are loaded into
-/// memory, so they must fit in RAM.
-pub fn compare_parquet(
-    config: &Config,
-    left: &[PathBuf],
-    right: &[PathBuf],
-) -> Result<Reconciliation, Error> {
-    let compared = ComparedRows::load(config, left, right)?;
+/// Compares two datasets in full: their schemas, their rows and their
+/// fingerprints, with one overall verdict.
+pub fn compare(config: &Config, left: &Dataset, right: &Dataset) -> Result<Report, Error> {
+    let compared = ComparedRows::new(config, left, right)?;
     let plan = &compared.plan;
 
     let schema_section = SchemaSection::new(
@@ -141,42 +111,36 @@ pub fn compare_parquet(
         },
     );
 
-    Ok(Reconciliation {
-        report: Report::new(schema_section, compared.row_section, fingerprint_section),
-        left_files: compared.left_files,
-        right_files: compared.right_files,
-    })
+    Ok(Report::new(
+        schema_section,
+        compared.row_section,
+        fingerprint_section,
+    ))
 }
 
-/// Everything the row comparison produces. [`compare_parquet_rows`] reports
-/// the row section alone; [`compare_parquet`] adds the schema verdict and
-/// the fingerprints, which need the plan and the tables.
+/// Everything the row comparison produces. [`compare_rows`] reports the row
+/// section alone; [`compare`] adds the schema verdict and the fingerprints,
+/// which need the plan and the tables.
 struct ComparedRows {
     plan: ComparisonPlan,
     left_table: Table,
     right_table: Table,
     row_section: RowSection,
-    left_files: Vec<InputFile>,
-    right_files: Vec<InputFile>,
 }
 
 impl ComparedRows {
-    /// Reads both datasets, checks the configuration against their schemas,
-    /// and compares the rows.
-    fn load(config: &Config, left: &[PathBuf], right: &[PathBuf]) -> Result<Self, Error> {
-        let left_dataset = parquet_input::read_dataset(left)?;
-        let right_dataset = parquet_input::read_dataset(right)?;
-
+    /// Checks the configuration against both schemas and compares the rows.
+    fn new(config: &Config, left: &Dataset, right: &Dataset) -> Result<Self, Error> {
         // Checks the configuration against both schemas before touching rows.
-        let plan = ComparisonPlan::new(config, &left_dataset.schema, &right_dataset.schema)?;
+        let plan = ComparisonPlan::new(config, &left.schema, &right.schema)?;
 
         let left_table = Table::load(
-            &left_dataset.batches,
+            &left.batches,
             &plan.left_columns_to_load,
             &plan.normalization,
         );
         let right_table = Table::load(
-            &right_dataset.batches,
+            &right.batches,
             &plan.right_columns_to_load,
             &plan.normalization,
         );
@@ -195,8 +159,6 @@ impl ComparedRows {
             left_table,
             right_table,
             row_section,
-            left_files: left_dataset.files,
-            right_files: right_dataset.files,
         })
     }
 }

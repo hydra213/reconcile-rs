@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "reconcilers"
+description = "Deterministic data reconciliation for files and dataframes: schema, keys, values and auditable verdicts."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dynamic = ["version"]
+keywords = ["parquet", "arrow", "reconciliation", "data-quality", "diff"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+]
+
+[project.optional-dependencies]
+# pandas dataframes are handed over through pyarrow.
+pandas = ["pandas", "pyarrow>=14"]
+test = ["pytest", "pyarrow>=14", "pandas", "polars>=1.0"]
+
+[project.urls]
+Repository = "https://github.com/hydra213/reconcile-rs"
+
+[tool.maturin]
+# The Rust code compiles to `reconcilers/_native`; everything else in the
+# `reconcilers/` folder is plain Python.
+module-name = "reconcilers._native"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

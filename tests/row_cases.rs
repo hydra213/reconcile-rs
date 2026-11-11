@@ -6,10 +6,15 @@
 
 mod common;
 
-use common::{accounts, accounts_with_float_balance, write_parquet};
+use std::sync::Arc;
+
+use arrow::array::{Int64Array, LargeStringArray};
+use common::{
+    accounts, accounts_with_float_balance, compare_files, compare_rows_of_files, write_parquet,
+};
 use reconcilers::policy::Verdict;
 use reconcilers::report::{ColumnResult, Report};
-use reconcilers::{Config, Error, compare_parquet, compare_parquet_rows};
+use reconcilers::{Config, Dataset, Error};
 
 const KEYED_ON_ID: &str = "[comparison]\nkeys = [\"id\"]\n";
 
@@ -30,9 +35,7 @@ fn identical_files_pass() {
     let left = write_parquet("identical_left.parquet", &accounts(&rows));
     let right = write_parquet("identical_right.parquet", &accounts(&rows));
 
-    let report = compare_parquet(&config(KEYED_ON_ID), &[left], &[right])
-        .unwrap()
-        .report;
+    let report = compare_files(&config(KEYED_ON_ID), &[left], &[right]).unwrap();
 
     assert_eq!(report.verdict, Verdict::Pass);
     assert_eq!(row_counts(&report).unchanged_rows, 2);
@@ -44,14 +47,34 @@ fn comparing_rows_only_leaves_out_the_schema_and_fingerprints() {
     let left = write_parquet("rows_only_left.parquet", &accounts(&rows));
     let right = write_parquet("rows_only_right.parquet", &accounts(&rows));
 
-    let report = compare_parquet_rows(&config(KEYED_ON_ID), &[left], &[right])
-        .unwrap()
-        .report;
+    let report = compare_rows_of_files(&config(KEYED_ON_ID), &[left], &[right]).unwrap();
 
     assert_eq!(report.verdict, Verdict::Pass);
     assert_eq!(row_counts(&report).unchanged_rows, 1);
     assert!(report.schema.is_none());
     assert!(report.fingerprints.is_none());
+}
+
+#[test]
+fn a_table_in_memory_compares_equal_to_the_same_rows_in_a_parquet_file() {
+    // Dataframe libraries hand over text as `LargeUtf8`; Parquet readers
+    // produce `Utf8`. The data is the same, so the comparison must pass.
+    let rows = [(Some(1), Some("ann"), Some(100))];
+    let file = write_parquet("in_memory_left.parquet", &accounts(&rows));
+    let from_file = common::read_files(&config(KEYED_ON_ID), &[file]).unwrap();
+
+    let in_memory = common::batch(vec![
+        ("id", Arc::new(Int64Array::from(vec![1]))),
+        ("owner", Arc::new(LargeStringArray::from(vec!["ann"]))),
+        ("balance", Arc::new(Int64Array::from(vec![100]))),
+    ]);
+    let from_memory = Dataset::from_batches(&in_memory.schema(), vec![in_memory]).unwrap();
+
+    let report = reconcilers::compare(&config(KEYED_ON_ID), &from_file, &from_memory).unwrap();
+
+    assert_eq!(report.verdict, Verdict::Pass);
+    assert_eq!(row_counts(&report).unchanged_rows, 1);
+    assert!(report.fingerprints.unwrap().content_matches);
 }
 
 #[test]
@@ -73,9 +96,7 @@ fn missing_extra_and_changed_rows_are_counted() {
         ]),
     );
 
-    let report = compare_parquet(&config(KEYED_ON_ID), &[left], &[right])
-        .unwrap()
-        .report;
+    let report = compare_files(&config(KEYED_ON_ID), &[left], &[right]).unwrap();
     let counts = row_counts(&report);
 
     assert_eq!(report.verdict, Verdict::Fail);
@@ -120,10 +141,8 @@ fn reordering_rows_leaves_the_report_byte_identical() {
     let right_reversed = write_parquet("order_right_reversed.parquet", &accounts(&right_reversed));
 
     let config = config(KEYED_ON_ID);
-    let original = compare_parquet(&config, &[left], &[right]).unwrap().report;
-    let reordered = compare_parquet(&config, &[left_reversed], &[right_reversed])
-        .unwrap()
-        .report;
+    let original = compare_files(&config, &[left], &[right]).unwrap();
+    let reordered = compare_files(&config, &[left_reversed], &[right_reversed]).unwrap();
 
     assert_eq!(original.to_json(), reordered.to_json());
 }
@@ -138,9 +157,7 @@ fn a_dataset_split_over_two_files_equals_the_same_rows_in_one_file() {
     let part_2 = write_parquet("split_part_2.parquet", &accounts(&second_half));
     let whole = write_parquet("split_whole.parquet", &accounts(&all_rows));
 
-    let report = compare_parquet(&config(KEYED_ON_ID), &[part_1, part_2], &[whole])
-        .unwrap()
-        .report;
+    let report = compare_files(&config(KEYED_ON_ID), &[part_1, part_2], &[whole]).unwrap();
 
     assert_eq!(report.verdict, Verdict::Pass);
     assert_eq!(row_counts(&report).left_rows, 2);
@@ -165,9 +182,7 @@ fn duplicate_and_null_keys_fail_and_are_not_compared() {
         ]),
     );
 
-    let report = compare_parquet(&config(KEYED_ON_ID), &[left], &[right])
-        .unwrap()
-        .report;
+    let report = compare_files(&config(KEYED_ON_ID), &[left], &[right]).unwrap();
     let counts = row_counts(&report);
 
     assert_eq!(report.verdict, Verdict::Fail);
@@ -187,9 +202,7 @@ fn a_column_with_different_kinds_is_inconclusive_not_passed() {
         "kinds_right.parquet",
         &accounts_with_float_balance(&[(1, "ann", 100.0)]),
     );
-    let report = compare_parquet(&config(KEYED_ON_ID), &[left], &[right])
-        .unwrap()
-        .report;
+    let report = compare_files(&config(KEYED_ON_ID), &[left], &[right]).unwrap();
     let rows = report.rows.unwrap();
 
     assert_eq!(rows.verdict, Verdict::Inconclusive);
@@ -208,7 +221,7 @@ fn a_key_that_is_not_in_the_data_is_a_configuration_error() {
     let left = write_parquet("badkey_left.parquet", &accounts(&rows));
     let right = write_parquet("badkey_right.parquet", &accounts(&rows));
 
-    let result = compare_parquet(
+    let result = compare_files(
         &config("[comparison]\nkeys = [\"account_id\"]\n"),
         &[left],
         &[right],
@@ -228,7 +241,7 @@ fn files_with_different_schemas_cannot_form_one_dataset() {
         &accounts_with_float_balance(&[(2, "bob", 200.0)]),
     );
 
-    let result = compare_parquet(&config(KEYED_ON_ID), &[ints.clone(), floats], &[ints]);
+    let result = compare_files(&config(KEYED_ON_ID), &[ints.clone(), floats], &[ints]);
 
     assert!(matches!(result, Err(Error::FilesDisagreeOnSchema { .. })));
 }
@@ -260,9 +273,7 @@ fn a_difference_within_tolerance_passes_but_fingerprints_still_differ() {
         "#,
     );
 
-    let report = compare_parquet(&within_five, &[left], &[right])
-        .unwrap()
-        .report;
+    let report = compare_files(&within_five, &[left], &[right]).unwrap();
 
     assert_eq!(report.verdict, Verdict::Pass);
     assert_eq!(row_counts(&report).changed_rows, 0);
@@ -297,9 +308,7 @@ fn a_difference_beyond_tolerance_fails() {
         "[comparison]\nkeys = [\"id\"]\n[[tolerances]]\ncolumn = \"balance\"\nmax_difference = \"5\"\n",
     );
 
-    let report = compare_parquet(&within_five, &[left], &[right])
-        .unwrap()
-        .report;
+    let report = compare_files(&within_five, &[left], &[right]).unwrap();
 
     assert_eq!(report.verdict, Verdict::Fail);
     assert_eq!(row_counts(&report).changed_rows, 1);
@@ -316,9 +325,7 @@ fn equal_content_in_a_different_row_order_has_matching_fingerprints() {
     let left = write_parquet("fingerprint_left.parquet", &accounts(&rows));
     let right = write_parquet("fingerprint_right.parquet", &accounts(&reversed));
 
-    let report = compare_parquet(&config(KEYED_ON_ID), &[left], &[right])
-        .unwrap()
-        .report;
+    let report = compare_files(&config(KEYED_ON_ID), &[left], &[right]).unwrap();
     let fingerprints = report.fingerprints.unwrap();
 
     assert!(fingerprints.content_matches);
@@ -339,16 +346,13 @@ fn composed_and_decomposed_accents_differ_unless_nfc_is_switched_on() {
     );
     let with_nfc = config("[comparison]\nkeys = [\"id\"]\n[normalization]\nunicode = \"nfc\"\n");
 
-    let exact = compare_parquet(
+    let exact = compare_files(
         &config(KEYED_ON_ID),
         std::slice::from_ref(&left),
         std::slice::from_ref(&right),
     )
-    .unwrap()
-    .report;
-    let normalized = compare_parquet(&with_nfc, &[left], &[right])
-        .unwrap()
-        .report;
+    .unwrap();
+    let normalized = compare_files(&with_nfc, &[left], &[right]).unwrap();
 
     assert_eq!(row_counts(&exact).changed_rows, 1);
     assert_eq!(normalized.verdict, Verdict::Pass);

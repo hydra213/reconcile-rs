@@ -46,7 +46,7 @@ impl LogicalSchema {
             .iter()
             .map(|field| Column {
                 name: field.name().clone(),
-                data_type: field.data_type().clone(),
+                data_type: without_storage_encoding(field.data_type()),
                 nullable: field.is_nullable(),
             })
             .collect();
@@ -94,6 +94,20 @@ impl LogicalSchema {
         }
 
         Ok(Self { columns })
+    }
+}
+
+/// Arrow has several ways to store the same text or bytes in memory
+/// (`Utf8`, `LargeUtf8` and `Utf8View` all hold strings). Which one a
+/// column uses depends on the program that produced it, not on the data:
+/// Parquet readers produce `Utf8`, Polars produces `LargeUtf8` or
+/// `Utf8View`. A logical schema names one type for each, so that the same
+/// column from two programs is not reported as a type change.
+fn without_storage_encoding(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8,
+        DataType::LargeBinary | DataType::BinaryView => DataType::Binary,
+        other => other.clone(),
     }
 }
 
@@ -242,6 +256,19 @@ mod tests {
         let left = schema(vec![Field::new("id", DataType::Int64, false)]);
         let right = left.clone();
         assert_eq!(diff_schemas(&left, &right), vec![]);
+    }
+
+    #[test]
+    fn the_way_text_and_bytes_are_stored_is_not_a_difference() {
+        let from_parquet = schema(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("payload", DataType::Binary, true),
+        ]);
+        let from_polars = schema(vec![
+            Field::new("name", DataType::LargeUtf8, true),
+            Field::new("payload", DataType::BinaryView, true),
+        ]);
+        assert_eq!(diff_schemas(&from_parquet, &from_polars), vec![]);
     }
 
     #[test]

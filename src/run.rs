@@ -6,12 +6,10 @@
 //! bytes change from run to run or machine to machine, so they are kept
 //! here and written to a separate `run.json`.
 
-use std::path::Path;
-
 use serde::Serialize;
 
+use crate::dataset::InputFile;
 use crate::fingerprint::Fingerprint;
-use crate::parquet_input::InputFile;
 
 /// Everything worth recording about one run of the tool.
 #[derive(Debug, Clone, Serialize)]
@@ -44,10 +42,11 @@ pub struct RunFile {
 }
 
 impl RunFile {
-    /// A file whose footer was read but whose contents were not.
-    pub fn path_only(path: &Path) -> Self {
+    /// An input that was named on the command line but whose rows were not
+    /// read: a file, a folder or a URL.
+    pub fn path_only(location: &str) -> Self {
         Self {
-            path: path.display().to_string(),
+            path: location.to_string(),
             size_bytes: None,
             fingerprint: None,
         }
@@ -57,7 +56,7 @@ impl RunFile {
 impl From<&InputFile> for RunFile {
     fn from(file: &InputFile) -> Self {
         Self {
-            path: file.path.display().to_string(),
+            path: file.location.clone(),
             size_bytes: Some(file.size_bytes),
             fingerprint: Some(file.fingerprint),
         }

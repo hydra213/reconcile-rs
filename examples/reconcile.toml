@@ -47,3 +47,22 @@ strict_on_inconclusive = true    # a column could not be compared
 [report]
 sample_limit = 10                # example keys listed per kind of difference
 show_values = false              # true writes real keys and values to the report
+
+# How CSV files are read. These settings have no effect on Parquet files or
+# dataframes.
+[csv]
+delimiter = ","                  # the single character between two values
+null_values = [""]               # values that mean NULL, in any column
+
+# A CSV file has no column types, and none are guessed. A column is text
+# unless its type is declared here, by the column's name in the file:
+#
+# [csv.types]
+# trade_id = "int64"
+# trade_amount = "decimal(18, 2)"
+# business_date = "date"
+# booked_at = "timestamp[us, UTC]"
+#
+# Type names: string, bool, int8/16/32/64, uint8/16/32/64, float32/64,
+# decimal(precision, scale), date, timestamp[s|ms|us|ns] and
+# timestamp[unit, zone].

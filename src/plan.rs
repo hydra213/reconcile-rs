@@ -296,7 +296,9 @@ fn why_inconclusive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ColumnMapping, ComparisonConfig, ReportConfig, ToleranceConfig};
+    use crate::config::{
+        ColumnMapping, ComparisonConfig, CsvConfig, ReportConfig, ToleranceConfig,
+    };
     use crate::normalize::NaiveTimestampRule;
     use crate::policy::{RowPolicy, SchemaPolicy};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -326,6 +328,7 @@ mod tests {
             tolerances: Vec::new(),
             policy: RowPolicy::default(),
             report: ReportConfig::default(),
+            csv: CsvConfig::default(),
         }
     }
 
