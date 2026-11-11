@@ -32,6 +32,8 @@ pub struct Config {
     pub tolerances: Vec<ToleranceConfig>,
     #[serde(default)]
     pub policy: RowPolicy,
+    #[serde(default)]
+    pub report: ReportConfig,
 }
 
 /// The `[comparison]` section.
@@ -66,6 +68,28 @@ pub struct ToleranceConfig {
     /// A plain non-negative decimal number, written as a string so that no
     /// precision is lost, for example `"0.01"`.
     pub max_difference: String,
+}
+
+/// The `[report]` section: what example data a report may contain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReportConfig {
+    /// The largest number of example keys listed for each kind of
+    /// difference. Zero lists none.
+    pub sample_limit: u64,
+    /// Write real key and cell values into the report. Off by default, so a
+    /// report can be shared without leaking data; examples are then
+    /// identified by a fingerprint of their key only.
+    pub show_values: bool,
+}
+
+impl Default for ReportConfig {
+    fn default() -> Self {
+        Self {
+            sample_limit: 10,
+            show_values: false,
+        }
+    }
 }
 
 impl Config {
@@ -337,6 +361,16 @@ mod tests {
 
         assert_eq!(strict.fingerprint(), strict.clone().fingerprint());
         assert_ne!(strict.fingerprint(), relaxed.fingerprint());
+    }
+
+    #[test]
+    fn the_example_configuration_is_valid_and_shows_the_defaults() {
+        let example = Config::from_toml_str(include_str!("../examples/reconcile.toml")).unwrap();
+
+        // The example promises that these sections show their defaults.
+        assert_eq!(example.policy, RowPolicy::default());
+        assert_eq!(example.report, ReportConfig::default());
+        assert_eq!(example.normalization, Normalization::default());
     }
 
     #[test]

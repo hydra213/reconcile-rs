@@ -5,6 +5,7 @@
 //! [`crate::policy`].
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use arrow::datatypes::{DataType, Schema};
 use serde::{Serialize, Serializer};
@@ -130,6 +131,37 @@ impl SchemaDifference {
             | Self::ColumnAdded { column }
             | Self::TypeChanged { column, .. }
             | Self::NullabilityChanged { column, .. } => column,
+        }
+    }
+}
+
+impl fmt::Display for SchemaDifference {
+    /// One short sentence describing the difference, for reports.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let nullability = |nullable: bool| if nullable { "nullable" } else { "not nullable" };
+
+        match self {
+            Self::ColumnRemoved { column } => {
+                write!(f, "`{column}` is missing from the right side")
+            }
+            Self::ColumnAdded { column } => {
+                write!(f, "`{column}` exists only on the right side")
+            }
+            Self::TypeChanged {
+                column,
+                left,
+                right,
+            } => write!(f, "`{column}` changed type from {left} to {right}"),
+            Self::NullabilityChanged {
+                column,
+                left_nullable,
+                right_nullable,
+            } => write!(
+                f,
+                "`{column}` changed from {} to {}",
+                nullability(*left_nullable),
+                nullability(*right_nullable)
+            ),
         }
     }
 }

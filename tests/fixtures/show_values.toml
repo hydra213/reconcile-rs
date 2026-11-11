@@ -1,0 +1,11 @@
+# Like examples/reconcile.toml, but real keys and values appear in the report.
+[comparison]
+keys = ["trade_id"]
+schema_policy = "compatible"
+
+[[column_mappings]]
+left = "trade_amt"
+right = "trade_amount"
+
+[report]
+show_values = true

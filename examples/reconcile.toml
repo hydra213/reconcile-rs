@@ -41,3 +41,8 @@ fail_on_duplicate_keys = true    # a key appears on more than one row
 fail_on_null_keys = true         # a key column contains NULL
 max_changed_rows = 0             # matched rows allowed to differ
 strict_on_inconclusive = true    # a column could not be compared
+
+# What example data a report may contain.
+[report]
+sample_limit = 10                # example keys listed per kind of difference
+show_values = false              # true writes real keys and values to the report

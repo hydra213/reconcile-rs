@@ -1,6 +1,6 @@
 ---
 source: tests/cli_cases.rs
-expression: first_json
+expression: "read(dir.join(\"findings.json\"))"
 ---
 {
   "report_version": 1,

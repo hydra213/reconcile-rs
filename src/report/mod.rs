@@ -3,21 +3,28 @@
 //!
 //! A report contains only things derived from the data and the policy. It
 //! never contains timestamps, file paths or durations, so the same inputs
-//! always produce byte-identical JSON.
+//! always produce byte-identical JSON. Those machine-specific details live
+//! in [`crate::run::RunMetadata`] instead.
+//!
+//! - This file defines the report and builds it.
+//! - [`samples`] picks the example keys and decides what may be shown.
+//! - [`text`] and [`markdown`] render a report for people.
 
-use std::fmt::Write as _;
-use std::path::Path;
+pub mod markdown;
+pub mod samples;
+pub mod text;
 
 use serde::Serialize;
 
 use crate::canonical::CANONICAL_VERSION;
-use crate::error::Error;
+use crate::config::ReportConfig;
 use crate::fingerprint::{self, Fingerprint};
 use crate::normalize::Normalization;
 use crate::plan::ComparisonPlan;
 use crate::policy::{self, RowFinding, RowPolicy, SchemaFinding, SchemaPolicy, Verdict};
 use crate::rowdiff::{RowCounts, RowDiff};
-use crate::schema::{self, Column, LogicalSchema, SchemaDifference};
+use crate::schema::{self, Column, LogicalSchema};
+use samples::Samples;
 
 /// Bumped whenever the JSON layout of a report changes.
 pub const REPORT_VERSION: u32 = 1;
@@ -57,6 +64,8 @@ pub struct RowSection {
     pub findings: Vec<RowFinding>,
     /// Every non-key column that exists on both sides, sorted by name.
     pub columns: Vec<ColumnResult>,
+    /// A bounded number of example keys for each kind of difference.
+    pub samples: Samples,
 }
 
 /// Digests that tie the report to its exact inputs and settings.
@@ -83,7 +92,7 @@ pub struct FingerprintSection {
 /// Both are independent of row order and file layout, so rewriting a file
 /// with its rows in another order does not change the report. Fingerprints
 /// of the raw file bytes are deliberately not included here for the same
-/// reason; they are available on [`crate::parquet_input::Dataset`].
+/// reason; they are recorded in [`crate::run::RunMetadata`].
 #[derive(Debug, Clone, Serialize)]
 pub struct SideFingerprints {
     /// The logical schema, after column mappings.
@@ -114,7 +123,7 @@ pub enum ColumnResult {
 }
 
 impl ColumnResult {
-    fn column(&self) -> &str {
+    pub fn column(&self) -> &str {
         match self {
             Self::Compared { column, .. } | Self::Inconclusive { column, .. } => column,
         }
@@ -140,7 +149,12 @@ impl SchemaSection {
 
 impl RowSection {
     /// Judges the observed row differences under `policy`.
-    pub fn new(plan: &ComparisonPlan, diff: &RowDiff, policy: &RowPolicy) -> Self {
+    pub fn new(
+        plan: &ComparisonPlan,
+        diff: &RowDiff,
+        policy: &RowPolicy,
+        report_config: &ReportConfig,
+    ) -> Self {
         let counts = diff.counts();
         let findings =
             policy::evaluate_rows(&counts, plan.inconclusive_columns.len() as u64, policy);
@@ -174,6 +188,7 @@ impl RowSection {
             counts,
             findings,
             columns,
+            samples: Samples::new(diff, &plan.keys, report_config),
         }
     }
 }
@@ -193,6 +208,17 @@ impl FingerprintSection {
             content_matches: left.content == right.content,
             left,
             right,
+        }
+    }
+}
+
+impl FingerprintSection {
+    /// `MATCH` or `DIFFERENT`, for text and Markdown reports.
+    pub fn outcome(&self) -> &'static str {
+        if self.content_matches {
+            "MATCH"
+        } else {
+            "DIFFERENT"
         }
     }
 }
@@ -228,151 +254,13 @@ impl Report {
         json
     }
 
-    /// Writes the JSON report to `path`, replacing any existing file.
-    pub fn write_json(&self, path: &Path) -> Result<(), Error> {
-        std::fs::write(path, self.to_json()).map_err(|source| Error::WriteReport {
-            path: path.to_path_buf(),
-            source,
-        })
-    }
-
     /// A plain-text summary for the terminal.
     pub fn to_text(&self) -> String {
-        let mut text = String::new();
-        // Writing to a String cannot fail, so the results are ignored here
-        // and in the helper functions below.
-        let _ = writeln!(text, "Verdict: {}", self.verdict);
-        let _ = writeln!(text);
-        write_schema_text(&mut text, &self.schema);
-        if let Some(rows) = &self.rows {
-            let _ = writeln!(text);
-            write_rows_text(&mut text, rows);
-        }
-        if let Some(fingerprints) = &self.fingerprints {
-            let _ = writeln!(text);
-            write_fingerprints_text(&mut text, fingerprints);
-        }
-        text
-    }
-}
-
-fn write_schema_text(text: &mut String, schema: &SchemaSection) {
-    let _ = writeln!(
-        text,
-        "Schema: {} (policy: {})",
-        schema.verdict, schema.policy
-    );
-    let _ = writeln!(
-        text,
-        "  {} left columns, {} right columns",
-        schema.left_columns.len(),
-        schema.right_columns.len()
-    );
-
-    if schema.findings.is_empty() {
-        let _ = writeln!(text, "  No schema differences.");
-    }
-    for finding in &schema.findings {
-        let _ = writeln!(
-            text,
-            "  {:<12}  {}",
-            finding.verdict,
-            describe_difference(&finding.difference)
-        );
-        let _ = writeln!(text, "  {:<12}  {}", "", finding.explanation);
-    }
-}
-
-fn write_rows_text(text: &mut String, rows: &RowSection) {
-    let counts = &rows.counts;
-    let _ = writeln!(
-        text,
-        "Rows: {} (keys: {})",
-        rows.verdict,
-        rows.keys.join(", ")
-    );
-    let _ = writeln!(
-        text,
-        "  {} left rows, {} right rows, {} matched keys, {} rows compared",
-        counts.left_rows, counts.right_rows, counts.matched_keys, counts.compared_rows
-    );
-    for finding in &rows.findings {
-        let _ = writeln!(text, "  {:<12}  {}", finding.verdict, finding.explanation);
+        text::render(self)
     }
 
-    let _ = writeln!(text);
-    let _ = writeln!(text, "Columns:");
-    if rows.columns.is_empty() {
-        let _ = writeln!(text, "  No columns besides the keys exist on both sides.");
+    /// The report as a Markdown document.
+    pub fn to_markdown(&self) -> String {
+        markdown::render(self)
     }
-    for column in &rows.columns {
-        match column {
-            ColumnResult::Compared {
-                column,
-                mismatches,
-                tolerance,
-                within_tolerance,
-            } => {
-                let _ = write!(text, "  `{column}`: {mismatches} mismatch(es)");
-                if let Some(tolerance) = tolerance {
-                    let _ = write!(
-                        text,
-                        ", {within_tolerance} more within the tolerance of {tolerance}"
-                    );
-                }
-                let _ = writeln!(text);
-            }
-            ColumnResult::Inconclusive { column, reason } => {
-                let _ = writeln!(text, "  `{column}`: not compared, {reason}");
-            }
-        }
-    }
-}
-
-fn write_fingerprints_text(text: &mut String, fingerprints: &FingerprintSection) {
-    let outcome = if fingerprints.content_matches {
-        "MATCH"
-    } else {
-        "DIFFERENT"
-    };
-    let _ = writeln!(
-        text,
-        "Fingerprints: {outcome} ({}, canonical version {})",
-        fingerprints.algorithm, fingerprints.canonical_version
-    );
-    let _ = writeln!(
-        text,
-        "  A screening signal over the key and compared columns, not a verdict."
-    );
-    let _ = writeln!(text, "  left content   {}", fingerprints.left.content);
-    let _ = writeln!(text, "  right content  {}", fingerprints.right.content);
-}
-
-fn describe_difference(difference: &SchemaDifference) -> String {
-    match difference {
-        SchemaDifference::ColumnRemoved { column } => {
-            format!("`{column}` is missing from the right side")
-        }
-        SchemaDifference::ColumnAdded { column } => {
-            format!("`{column}` exists only on the right side")
-        }
-        SchemaDifference::TypeChanged {
-            column,
-            left,
-            right,
-        } => format!("`{column}` changed type from {left} to {right}"),
-        SchemaDifference::NullabilityChanged {
-            column,
-            left_nullable,
-            right_nullable,
-        } => format!(
-            "`{column}` changed from {} to {}",
-            nullability_name(*left_nullable),
-            nullability_name(*right_nullable)
-        ),
-    }
-}
-
-fn nullability_name(nullable: bool) -> &'static str {
-    if nullable { "nullable" } else { "not nullable" }
 }

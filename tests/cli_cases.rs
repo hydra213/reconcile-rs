@@ -27,9 +27,15 @@ fn stdout(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout should be UTF-8")
 }
 
-/// A report path inside Cargo's per-test scratch directory.
-fn report_path(file_name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(file_name)
+/// An output directory inside Cargo's per-test scratch directory. Use a
+/// unique name per test, because tests run in parallel.
+fn out_dir(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
+}
+
+fn read(path: PathBuf) -> String {
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{} should be readable: {error}", path.display()))
 }
 
 #[test]
@@ -76,32 +82,6 @@ fn a_file_that_is_not_parquet_is_an_execution_error_with_exit_code_2() {
 }
 
 #[test]
-fn the_json_report_is_byte_identical_across_runs() {
-    let first = report_path("schema_report_first.json");
-    let second = report_path("schema_report_second.json");
-
-    for path in [&first, &second] {
-        let path = path.to_str().expect("the temp path should be UTF-8");
-        reconcilers(&[
-            "schema",
-            "--left",
-            LEGACY,
-            "--right",
-            NEW,
-            "--policy",
-            "compatible",
-            "--report",
-            path,
-        ]);
-    }
-
-    let first_json = std::fs::read_to_string(&first).expect("first report should exist");
-    let second_json = std::fs::read_to_string(&second).expect("second report should exist");
-    assert_eq!(first_json, second_json);
-    insta::assert_snapshot!(first_json);
-}
-
-#[test]
 fn rowdiff_on_the_sample_files_fails_with_exit_code_1() {
     let output = reconcilers(&[
         "rowdiff", "--left", LEGACY, "--right", NEW, "--config", CONFIG,
@@ -112,21 +92,90 @@ fn rowdiff_on_the_sample_files_fails_with_exit_code_1() {
 }
 
 #[test]
-fn rowdiff_json_report_is_byte_identical_across_runs() {
-    let first = report_path("rowdiff_report_first.json");
-    let second = report_path("rowdiff_report_second.json");
+fn findings_are_byte_identical_across_runs_and_run_metadata_is_separate() {
+    let first = out_dir("rowdiff_first");
+    let second = out_dir("rowdiff_second");
 
-    for path in [&first, &second] {
-        let path = path.to_str().expect("the temp path should be UTF-8");
+    for dir in [&first, &second] {
+        let dir = dir.to_str().expect("the temp path should be UTF-8");
         reconcilers(&[
-            "rowdiff", "--left", LEGACY, "--right", NEW, "--config", CONFIG, "--report", path,
+            "rowdiff",
+            "--left",
+            LEGACY,
+            "--right",
+            NEW,
+            "--config",
+            CONFIG,
+            "--out-dir",
+            dir,
         ]);
     }
 
-    let first_json = std::fs::read_to_string(&first).expect("first report should exist");
-    let second_json = std::fs::read_to_string(&second).expect("second report should exist");
-    assert_eq!(first_json, second_json);
-    insta::assert_snapshot!(first_json);
+    let findings = read(first.join("findings.json"));
+    assert_eq!(findings, read(second.join("findings.json")));
+    assert_eq!(
+        read(first.join("report.md")),
+        read(second.join("report.md"))
+    );
+    insta::assert_snapshot!("findings_json", findings);
+    insta::assert_snapshot!("report_md", read(first.join("report.md")));
+
+    // The run metadata holds what the findings must not: time and paths.
+    let run = read(first.join("run.json"));
+    assert!(run.contains("\"started_at\""));
+    assert!(run.contains(LEGACY));
+    assert!(!findings.contains("started_at"));
+    assert!(!findings.contains(LEGACY));
+}
+
+#[test]
+fn schema_command_also_writes_the_output_files() {
+    let dir = out_dir("schema_outputs");
+    let output = reconcilers(&[
+        "schema",
+        "--left",
+        LEGACY,
+        "--right",
+        NEW,
+        "--policy",
+        "compatible",
+        "--out-dir",
+        dir.to_str().expect("the temp path should be UTF-8"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    insta::assert_snapshot!("schema_findings_json", read(dir.join("findings.json")));
+    assert!(read(dir.join("report.md")).starts_with("# Reconciliation report"));
+    assert!(read(dir.join("run.json")).contains("\"command\": \"schema\""));
+}
+
+#[test]
+fn showing_values_puts_real_keys_in_the_report() {
+    let output = reconcilers(&[
+        "rowdiff",
+        "--left",
+        LEGACY,
+        "--right",
+        NEW,
+        "--config",
+        "tests/fixtures/show_values.toml",
+    ]);
+    let text = stdout(&output);
+
+    assert!(text.contains("only on the left: key (1004)"));
+    assert!(text.contains("changed: key (1002): `trade_amount` 2750.5 -> 2750.6"));
+}
+
+#[test]
+fn values_are_hidden_from_the_report_by_default() {
+    let output = reconcilers(&[
+        "rowdiff", "--left", LEGACY, "--right", NEW, "--config", CONFIG,
+    ]);
+    let text = stdout(&output);
+
+    assert!(text.contains("only on the left: key fingerprint "));
+    assert!(!text.contains("1004"));
+    assert!(!text.contains("2750"));
 }
 
 #[test]
