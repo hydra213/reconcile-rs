@@ -10,7 +10,10 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::canonical::CANONICAL_VERSION;
 use crate::error::Error;
+use crate::fingerprint::{self, Fingerprint};
+use crate::normalize::Normalization;
 use crate::plan::ComparisonPlan;
 use crate::policy::{self, RowFinding, RowPolicy, SchemaFinding, SchemaPolicy, Verdict};
 use crate::rowdiff::{RowCounts, RowDiff};
@@ -29,6 +32,9 @@ pub struct Report {
     /// Absent when only the schemas were compared.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<RowSection>,
+    /// Absent when only the schemas were compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprints: Option<FingerprintSection>,
 }
 
 /// How the two schemas differ and what the schema policy says about it.
@@ -53,12 +59,56 @@ pub struct RowSection {
     pub columns: Vec<ColumnResult>,
 }
 
+/// Digests that tie the report to its exact inputs and settings.
+///
+/// Fingerprints are a screening signal and never decide the verdict. They
+/// are exact, so values that differ within a tolerance still give different
+/// content fingerprints.
+#[derive(Debug, Clone, Serialize)]
+pub struct FingerprintSection {
+    pub algorithm: &'static str,
+    pub canonical_version: u32,
+    /// The normalisation rules applied before fingerprinting.
+    pub normalization: Normalization,
+    /// The fingerprint of the whole configuration.
+    pub configuration: Fingerprint,
+    pub left: SideFingerprints,
+    pub right: SideFingerprints,
+    /// Whether the two content fingerprints are equal.
+    pub content_matches: bool,
+}
+
+/// The fingerprints of one dataset.
+///
+/// Both are independent of row order and file layout, so rewriting a file
+/// with its rows in another order does not change the report. Fingerprints
+/// of the raw file bytes are deliberately not included here for the same
+/// reason; they are available on [`crate::parquet_input::Dataset`].
+#[derive(Debug, Clone, Serialize)]
+pub struct SideFingerprints {
+    /// The logical schema, after column mappings.
+    pub schema: Fingerprint,
+    /// Every row over the key and compared columns, independent of row
+    /// order. Columns that exist on one side only, or that could not be
+    /// compared, are not included.
+    pub content: Fingerprint,
+}
+
 /// What happened to one column during the row comparison.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ColumnResult {
     /// The column was compared on every compared row.
-    Compared { column: String, mismatches: u64 },
+    Compared {
+        column: String,
+        /// Rows where the values differ beyond any tolerance.
+        mismatches: u64,
+        /// The allowed numeric difference, if one is configured.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tolerance: Option<String>,
+        /// Rows where the values differ but are within the tolerance.
+        within_tolerance: u64,
+    },
     /// The column could not be compared; `reason` says why.
     Inconclusive { column: String, reason: String },
 }
@@ -102,6 +152,11 @@ impl RowSection {
                 .map(|(column, mismatches)| ColumnResult::Compared {
                     column: column.clone(),
                     mismatches: *mismatches,
+                    tolerance: plan
+                        .tolerances
+                        .get(column)
+                        .map(|tolerance| tolerance.max_difference().to_string()),
+                    within_tolerance: diff.column_within_tolerance[column],
                 });
         let inconclusive =
             plan.inconclusive_columns
@@ -123,6 +178,25 @@ impl RowSection {
     }
 }
 
+impl FingerprintSection {
+    pub fn new(
+        normalization: Normalization,
+        configuration: Fingerprint,
+        left: SideFingerprints,
+        right: SideFingerprints,
+    ) -> Self {
+        Self {
+            algorithm: fingerprint::ALGORITHM,
+            canonical_version: CANONICAL_VERSION,
+            normalization,
+            configuration,
+            content_matches: left.content == right.content,
+            left,
+            right,
+        }
+    }
+}
+
 impl Report {
     /// A report that covers the schemas only.
     pub fn schema_only(schema: SchemaSection) -> Self {
@@ -131,16 +205,18 @@ impl Report {
             verdict: schema.verdict,
             schema,
             rows: None,
+            fingerprints: None,
         }
     }
 
     /// A report that covers the schemas and the rows.
-    pub fn new(schema: SchemaSection, rows: RowSection) -> Self {
+    pub fn new(schema: SchemaSection, rows: RowSection, fingerprints: FingerprintSection) -> Self {
         Self {
             report_version: REPORT_VERSION,
             verdict: schema.verdict.max(rows.verdict),
             schema,
             rows: Some(rows),
+            fingerprints: Some(fingerprints),
         }
     }
 
@@ -171,6 +247,10 @@ impl Report {
         if let Some(rows) = &self.rows {
             let _ = writeln!(text);
             write_rows_text(&mut text, rows);
+        }
+        if let Some(fingerprints) = &self.fingerprints {
+            let _ = writeln!(text);
+            write_fingerprints_text(&mut text, fingerprints);
         }
         text
     }
@@ -227,14 +307,45 @@ fn write_rows_text(text: &mut String, rows: &RowSection) {
     }
     for column in &rows.columns {
         match column {
-            ColumnResult::Compared { column, mismatches } => {
-                let _ = writeln!(text, "  `{column}`: {mismatches} mismatch(es)");
+            ColumnResult::Compared {
+                column,
+                mismatches,
+                tolerance,
+                within_tolerance,
+            } => {
+                let _ = write!(text, "  `{column}`: {mismatches} mismatch(es)");
+                if let Some(tolerance) = tolerance {
+                    let _ = write!(
+                        text,
+                        ", {within_tolerance} more within the tolerance of {tolerance}"
+                    );
+                }
+                let _ = writeln!(text);
             }
             ColumnResult::Inconclusive { column, reason } => {
                 let _ = writeln!(text, "  `{column}`: not compared, {reason}");
             }
         }
     }
+}
+
+fn write_fingerprints_text(text: &mut String, fingerprints: &FingerprintSection) {
+    let outcome = if fingerprints.content_matches {
+        "MATCH"
+    } else {
+        "DIFFERENT"
+    };
+    let _ = writeln!(
+        text,
+        "Fingerprints: {outcome} ({}, canonical version {})",
+        fingerprints.algorithm, fingerprints.canonical_version
+    );
+    let _ = writeln!(
+        text,
+        "  A screening signal over the key and compared columns, not a verdict."
+    );
+    let _ = writeln!(text, "  left content   {}", fingerprints.left.content);
+    let _ = writeln!(text, "  right content  {}", fingerprints.right.content);
 }
 
 fn describe_difference(difference: &SchemaDifference) -> String {

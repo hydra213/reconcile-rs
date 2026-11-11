@@ -6,10 +6,12 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchReader};
+use bytes::Bytes;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use crate::error::Error;
+use crate::fingerprint::Fingerprint;
 use crate::schema::LogicalSchema;
 
 /// A dataset loaded into memory.
@@ -18,6 +20,9 @@ pub struct Dataset {
     pub schema: LogicalSchema,
     /// The rows, in the chunks ("record batches") the reader produced.
     pub batches: Vec<RecordBatch>,
+    /// The fingerprint of each file's bytes, sorted. Sorting makes the list
+    /// independent of the order in which the files were named.
+    pub file_fingerprints: Vec<Fingerprint>,
 }
 
 /// Reads the schema of a dataset without reading any rows.
@@ -40,15 +45,40 @@ pub fn read_schema(paths: &[PathBuf]) -> Result<LogicalSchema, Error> {
 }
 
 /// Reads a whole dataset, schema and rows, into memory.
+///
+/// Each file is read from disk exactly once. Its fingerprint and its rows
+/// both come from those same bytes, so the fingerprint in the report always
+/// describes exactly the data that was compared, even if the file is
+/// changed on disk while the comparison runs.
 pub fn read_dataset(paths: &[PathBuf]) -> Result<Dataset, Error> {
     let schema = read_schema(paths)?;
 
     let mut batches = Vec::new();
+    let mut file_fingerprints = Vec::new();
     for path in paths {
-        let reader = open(path)?.build().map_err(|source| Error::ReadParquet {
+        let file_bytes = std::fs::read(path).map_err(|source| Error::OpenFile {
             path: path.clone(),
             source,
         })?;
+        file_fingerprints.push(Fingerprint::of_bytes(&file_bytes));
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(file_bytes))
+            .and_then(|builder| builder.build())
+            .map_err(|source| Error::ReadParquet {
+                path: path.clone(),
+                source,
+            })?;
+
+        // The schema was checked from the file on disk a moment ago. Check
+        // it again on the bytes actually used, in case the file changed.
+        let file_schema = LogicalSchema::from_arrow(&reader.schema()).ok();
+        if file_schema.as_ref() != Some(&schema) {
+            return Err(Error::FilesDisagreeOnSchema {
+                first: paths[0].clone(),
+                other: path.clone(),
+            });
+        }
+
         for batch in reader {
             let batch = batch.map_err(|source| Error::ReadRows {
                 path: path.clone(),
@@ -57,8 +87,13 @@ pub fn read_dataset(paths: &[PathBuf]) -> Result<Dataset, Error> {
             batches.push(batch);
         }
     }
+    file_fingerprints.sort_unstable();
 
-    Ok(Dataset { schema, batches })
+    Ok(Dataset {
+        schema,
+        batches,
+        file_fingerprints,
+    })
 }
 
 fn read_file_schema(path: &Path) -> Result<LogicalSchema, Error> {

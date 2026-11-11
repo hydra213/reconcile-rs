@@ -10,11 +10,13 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::config::{Config, ConfigError, Side};
+use crate::normalize::Normalization;
 use crate::schema::{Column, LogicalSchema};
 use crate::table::ColumnToLoad;
+use crate::tolerance::Tolerance;
 use crate::value::ValueKind;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComparisonPlan {
     /// The left schema with column mappings applied, so both schemas use the
     /// same (right-side) names for the same logical column.
@@ -26,6 +28,10 @@ pub struct ComparisonPlan {
     pub compared_columns: Vec<String>,
     /// Non-key columns present on both sides that cannot be compared, sorted.
     pub inconclusive_columns: Vec<InconclusiveColumn>,
+    /// The allowed numeric difference for each column that has one.
+    pub tolerances: BTreeMap<String, Tolerance>,
+    /// The rules applied to every value before comparison.
+    pub normalization: Normalization,
     /// The columns to read from each side: the keys and the compared columns.
     pub left_columns_to_load: Vec<ColumnToLoad>,
     pub right_columns_to_load: Vec<ColumnToLoad>,
@@ -74,8 +80,9 @@ impl ComparisonPlan {
         let left_schema = apply_column_mappings(config, left_schema, right_schema)?;
         let right_schema = right_schema.clone();
 
+        let normalization = config.normalization;
         for key in &config.comparison.keys {
-            check_key(key, &left_schema, &right_schema)?;
+            check_key(key, &left_schema, &right_schema, &normalization)?;
         }
         let keys = config.comparison.keys.clone();
 
@@ -90,7 +97,7 @@ impl ComparisonPlan {
                 continue;
             };
 
-            match why_inconclusive(left_column, right_column) {
+            match why_inconclusive(left_column, right_column, &normalization) {
                 None => compared_columns.push(left_column.name.clone()),
                 Some(reason) => inconclusive_columns.push(InconclusiveColumn {
                     column: left_column.name.clone(),
@@ -98,6 +105,8 @@ impl ComparisonPlan {
                 }),
             }
         }
+
+        let tolerances = resolve_tolerances(config, &compared_columns, &right_schema)?;
 
         // On the left, a mapped column is stored under its original name.
         let left_physical_names: BTreeMap<&str, &str> = config
@@ -130,6 +139,8 @@ impl ComparisonPlan {
             keys,
             compared_columns,
             inconclusive_columns,
+            tolerances,
+            normalization,
             left_columns_to_load,
             right_columns_to_load,
         })
@@ -179,9 +190,10 @@ fn check_key(
     key: &str,
     left_schema: &LogicalSchema,
     right_schema: &LogicalSchema,
+    normalization: &Normalization,
 ) -> Result<(), ConfigError> {
-    let left_kind = key_kind(key, Side::Left, left_schema)?;
-    let right_kind = key_kind(key, Side::Right, right_schema)?;
+    let left_kind = key_kind(key, Side::Left, left_schema, normalization)?;
+    let right_kind = key_kind(key, Side::Right, right_schema, normalization)?;
 
     if left_kind != right_kind {
         return Err(ConfigError::KeyKindsDiffer {
@@ -193,13 +205,18 @@ fn check_key(
     Ok(())
 }
 
-fn key_kind(key: &str, side: Side, schema: &LogicalSchema) -> Result<ValueKind, ConfigError> {
+fn key_kind(
+    key: &str,
+    side: Side,
+    schema: &LogicalSchema,
+    normalization: &Normalization,
+) -> Result<ValueKind, ConfigError> {
     let column = schema.column(key).ok_or_else(|| ConfigError::KeyNotFound {
         side,
         column: key.to_string(),
     })?;
 
-    match ValueKind::of(&column.data_type) {
+    match normalization.kind_of(&column.data_type) {
         Some(kind) if kind.can_be_key() => Ok(kind),
         _ => Err(ConfigError::KeyTypeNotUsable {
             side,
@@ -209,15 +226,58 @@ fn key_kind(key: &str, side: Side, schema: &LogicalSchema) -> Result<ValueKind, 
     }
 }
 
+/// Checks every configured tolerance against the compared columns and
+/// returns them by column name.
+fn resolve_tolerances(
+    config: &Config,
+    compared_columns: &[String],
+    right_schema: &LogicalSchema,
+) -> Result<BTreeMap<String, Tolerance>, ConfigError> {
+    let mut tolerances = BTreeMap::new();
+    for entry in &config.tolerances {
+        if !compared_columns.contains(&entry.column) {
+            return Err(ConfigError::ToleranceColumnNotCompared {
+                column: entry.column.clone(),
+            });
+        }
+
+        // A compared column has the same supported kind on both sides, so
+        // looking at the right side is enough.
+        let kind = right_schema
+            .column(&entry.column)
+            .and_then(|column| config.normalization.kind_of(&column.data_type))
+            .expect("a compared column exists and has a supported type");
+        if !kind.is_numeric() {
+            return Err(ConfigError::ToleranceColumnNotNumeric {
+                column: entry.column.clone(),
+                kind: kind.to_string(),
+            });
+        }
+
+        let tolerance = Tolerance::parse(&entry.max_difference).ok_or_else(|| {
+            ConfigError::ToleranceNotANumber {
+                column: entry.column.clone(),
+                value: entry.max_difference.clone(),
+            }
+        })?;
+        tolerances.insert(entry.column.clone(), tolerance);
+    }
+    Ok(tolerances)
+}
+
 /// Returns the reason two columns cannot be compared, or `None` if they can.
-fn why_inconclusive(left: &Column, right: &Column) -> Option<InconclusiveReason> {
-    let Some(left_kind) = ValueKind::of(&left.data_type) else {
+fn why_inconclusive(
+    left: &Column,
+    right: &Column,
+    normalization: &Normalization,
+) -> Option<InconclusiveReason> {
+    let Some(left_kind) = normalization.kind_of(&left.data_type) else {
         return Some(InconclusiveReason::UnsupportedType {
             side: Side::Left,
             data_type: left.data_type.to_string(),
         });
     };
-    let Some(right_kind) = ValueKind::of(&right.data_type) else {
+    let Some(right_kind) = normalization.kind_of(&right.data_type) else {
         return Some(InconclusiveReason::UnsupportedType {
             side: Side::Right,
             data_type: right.data_type.to_string(),
@@ -236,7 +296,8 @@ fn why_inconclusive(left: &Column, right: &Column) -> Option<InconclusiveReason>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ColumnMapping, ComparisonConfig};
+    use crate::config::{ColumnMapping, ComparisonConfig, ToleranceConfig};
+    use crate::normalize::NaiveTimestampRule;
     use crate::policy::{RowPolicy, SchemaPolicy};
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -261,8 +322,85 @@ mod tests {
                     right: right.to_string(),
                 })
                 .collect(),
+            normalization: Normalization::default(),
+            tolerances: Vec::new(),
             policy: RowPolicy::default(),
         }
+    }
+
+    fn with_tolerance(mut config: Config, column: &str, max_difference: &str) -> Config {
+        config.tolerances.push(ToleranceConfig {
+            column: column.to_string(),
+            max_difference: max_difference.to_string(),
+        });
+        config
+    }
+
+    #[test]
+    fn a_tolerance_on_a_numeric_compared_column_is_accepted() {
+        let both = schema(vec![
+            ("id", DataType::Int64),
+            ("amount", DataType::Decimal128(18, 2)),
+        ]);
+        let config = with_tolerance(config(&["id"], &[]), "amount", "0.01");
+
+        let plan = ComparisonPlan::new(&config, &both, &both).unwrap();
+
+        assert_eq!(plan.tolerances["amount"], Tolerance::parse("0.01").unwrap());
+    }
+
+    #[test]
+    fn a_tolerance_on_a_string_column_is_rejected() {
+        let both = schema(vec![("id", DataType::Int64), ("name", DataType::Utf8)]);
+        let config = with_tolerance(config(&["id"], &[]), "name", "0.01");
+
+        assert_eq!(
+            ComparisonPlan::new(&config, &both, &both),
+            Err(ConfigError::ToleranceColumnNotNumeric {
+                column: "name".to_string(),
+                kind: "string".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_tolerance_on_a_key_or_unknown_column_is_rejected() {
+        let both = schema(vec![("id", DataType::Int64), ("amount", DataType::Int64)]);
+
+        for column in ["id", "no_such_column"] {
+            let config = with_tolerance(config(&["id"], &[]), column, "1");
+            assert_eq!(
+                ComparisonPlan::new(&config, &both, &both),
+                Err(ConfigError::ToleranceColumnNotCompared {
+                    column: column.to_string()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn naive_and_zoned_timestamps_are_comparable_only_when_utc_is_assumed() {
+        use arrow::datatypes::TimeUnit;
+        let left = schema(vec![
+            ("id", DataType::Int64),
+            ("at", DataType::Timestamp(TimeUnit::Microsecond, None)),
+        ]);
+        let right = schema(vec![
+            ("id", DataType::Int64),
+            (
+                "at",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            ),
+        ]);
+
+        let default_plan = ComparisonPlan::new(&config(&["id"], &[]), &left, &right).unwrap();
+        assert!(default_plan.compared_columns.is_empty());
+        assert_eq!(default_plan.inconclusive_columns.len(), 1);
+
+        let mut assume_utc = config(&["id"], &[]);
+        assume_utc.normalization.naive_timestamps = NaiveTimestampRule::AssumeUtc;
+        let utc_plan = ComparisonPlan::new(&assume_utc, &left, &right).unwrap();
+        assert_eq!(utc_plan.compared_columns, vec!["at"]);
     }
 
     #[test]

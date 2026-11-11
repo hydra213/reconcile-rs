@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::table::Table;
+use crate::tolerance::Tolerance;
 use crate::value::Value;
 
 /// The key of a row: one value per key column, in the configured order.
@@ -42,6 +43,10 @@ pub struct RowDiff {
     /// For every compared column, the number of rows where it differs.
     /// Columns with no differences are present with a count of zero.
     pub column_mismatches: BTreeMap<String, u64>,
+    /// For every compared column, the number of rows where the two values
+    /// are not equal but are within the column's tolerance. These do not
+    /// count as mismatches and do not make a row changed.
+    pub column_within_tolerance: BTreeMap<String, u64>,
 }
 
 /// A matched row whose values differ.
@@ -104,6 +109,9 @@ impl RowDiff {
 /// `key_columns` identify a row. `compared_columns` are the other columns to
 /// check on rows that match. Both tables must contain all of these columns.
 ///
+/// `tolerances` holds the allowed numeric difference for the columns that
+/// have one; all other columns must match exactly.
+///
 /// A key that is duplicated on either side is reported and then left out of
 /// the value comparison: with two candidate rows there is no way to know
 /// which one the other side should be compared with.
@@ -112,6 +120,7 @@ pub fn diff_rows(
     right: &Table,
     key_columns: &[String],
     compared_columns: &[String],
+    tolerances: &BTreeMap<String, Tolerance>,
 ) -> RowDiff {
     let left_index = KeyIndex::build(left, key_columns);
     let right_index = KeyIndex::build(right, key_columns);
@@ -128,10 +137,8 @@ pub fn diff_rows(
         matched_keys: 0,
         unchanged_rows: 0,
         changed_rows: Vec::new(),
-        column_mismatches: compared_columns
-            .iter()
-            .map(|column| (column.clone(), 0))
-            .collect(),
+        column_mismatches: zero_for_each(compared_columns),
+        column_within_tolerance: zero_for_each(compared_columns),
     };
 
     // BTreeMap iterates in key order, so every list below ends up sorted.
@@ -147,16 +154,32 @@ pub fn diff_rows(
             continue;
         };
 
-        let changes = changed_values(left, left_row, right, right_row, compared_columns);
+        let mut changes = Vec::new();
+        for column in compared_columns {
+            let left_value = &left.column(column)[left_row];
+            let right_value = &right.column(column)[right_row];
+            if left_value == right_value {
+                continue;
+            }
+
+            let tolerated = tolerances
+                .get(column)
+                .is_some_and(|tolerance| tolerance.allows(left_value, right_value));
+            if tolerated {
+                add_one(&mut diff.column_within_tolerance, column);
+            } else {
+                add_one(&mut diff.column_mismatches, column);
+                changes.push(ValueChange {
+                    column: column.clone(),
+                    left: left_value.clone(),
+                    right: right_value.clone(),
+                });
+            }
+        }
+
         if changes.is_empty() {
             diff.unchanged_rows += 1;
         } else {
-            for change in &changes {
-                *diff
-                    .column_mismatches
-                    .get_mut(&change.column)
-                    .expect("every compared column was given a zero count above") += 1;
-            }
             diff.changed_rows.push(ChangedRow {
                 key: key.clone(),
                 changes,
@@ -219,27 +242,15 @@ impl KeyIndex {
     }
 }
 
-/// The columns whose values differ between one left row and one right row.
-fn changed_values(
-    left: &Table,
-    left_row: usize,
-    right: &Table,
-    right_row: usize,
-    compared_columns: &[String],
-) -> Vec<ValueChange> {
-    let mut changes = Vec::new();
-    for column in compared_columns {
-        let left_value = &left.column(column)[left_row];
-        let right_value = &right.column(column)[right_row];
-        if left_value != right_value {
-            changes.push(ValueChange {
-                column: column.clone(),
-                left: left_value.clone(),
-                right: right_value.clone(),
-            });
-        }
-    }
-    changes
+/// A counter per column, all starting at zero.
+fn zero_for_each(columns: &[String]) -> BTreeMap<String, u64> {
+    columns.iter().map(|column| (column.clone(), 0)).collect()
+}
+
+fn add_one(counters: &mut BTreeMap<String, u64>, column: &str) {
+    *counters
+        .get_mut(column)
+        .expect("every compared column has a counter") += 1;
 }
 
 #[cfg(test)]
@@ -266,7 +277,13 @@ mod tests {
     }
 
     fn diff(left: &Table, right: &Table) -> RowDiff {
-        diff_rows(left, right, &names(&["id"]), &names(&["name"]))
+        diff_rows(
+            left,
+            right,
+            &names(&["id"]),
+            &names(&["name"]),
+            &BTreeMap::new(),
+        )
     }
 
     #[test]
@@ -392,11 +409,45 @@ mod tests {
         let left = build(&[(1, "mon", 10), (1, "tue", 20)]);
         let right = build(&[(1, "mon", 10), (1, "wed", 20)]);
 
-        let result = diff_rows(&left, &right, &names(&["id", "day"]), &names(&["qty"]));
+        let result = diff_rows(
+            &left,
+            &right,
+            &names(&["id", "day"]),
+            &names(&["qty"]),
+            &BTreeMap::new(),
+        );
 
         assert_eq!(result.matched_keys, 1);
         assert_eq!(result.left_only_keys, vec![vec![int(1), text("tue")]]);
         assert_eq!(result.right_only_keys, vec![vec![int(1), text("wed")]]);
+    }
+
+    #[test]
+    fn a_difference_within_tolerance_is_counted_but_is_not_a_change() {
+        let amounts = |values: &[i128]| {
+            Table::from_columns(vec![
+                ("id", (1..=values.len() as i128).map(int).collect()),
+                ("qty", values.iter().map(|value| int(*value)).collect()),
+            ])
+        };
+        let left = amounts(&[100, 200, 300]);
+        let right = amounts(&[100, 201, 305]);
+        let tolerances = BTreeMap::from([("qty".to_string(), Tolerance::parse("1").unwrap())]);
+
+        let result = diff_rows(
+            &left,
+            &right,
+            &names(&["id"]),
+            &names(&["qty"]),
+            &tolerances,
+        );
+
+        // Row 2 differs by 1 (allowed), row 3 by 5 (not allowed).
+        assert_eq!(result.column_within_tolerance["qty"], 1);
+        assert_eq!(result.column_mismatches["qty"], 1);
+        assert_eq!(result.unchanged_rows, 2);
+        assert_eq!(result.changed_rows.len(), 1);
+        assert_eq!(result.changed_rows[0].key, vec![int(3)]);
     }
 
     #[test]

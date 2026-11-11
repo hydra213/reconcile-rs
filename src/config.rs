@@ -8,25 +8,34 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
+use crate::fingerprint::Fingerprint;
+use crate::normalize::Normalization;
 use crate::policy::{RowPolicy, SchemaPolicy};
+use crate::tolerance::Tolerance;
 
 /// The whole configuration file.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub comparison: ComparisonConfig,
     /// Columns that have different names on the two sides.
     #[serde(default)]
     pub column_mappings: Vec<ColumnMapping>,
+    /// Opt-in rules applied to values before they are compared.
+    #[serde(default)]
+    pub normalization: Normalization,
+    /// Columns whose numbers may differ by a small amount.
+    #[serde(default)]
+    pub tolerances: Vec<ToleranceConfig>,
     #[serde(default)]
     pub policy: RowPolicy,
 }
 
 /// The `[comparison]` section.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComparisonConfig {
     /// The columns that identify a row, in order. A mapped column is named
@@ -40,11 +49,23 @@ pub struct ComparisonConfig {
 /// logical column as the right column `right`.
 ///
 /// After mapping, the column is known everywhere by its right-side name.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColumnMapping {
     pub left: String,
     pub right: String,
+}
+
+/// One `[[tolerances]]` entry: numbers in `column` that differ by at most
+/// `max_difference` count as equal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToleranceConfig {
+    /// The column, by its right-side name if it is mapped.
+    pub column: String,
+    /// A plain non-negative decimal number, written as a string so that no
+    /// precision is lost, for example `"0.01"`.
+    pub max_difference: String,
 }
 
 impl Config {
@@ -89,7 +110,28 @@ impl Config {
                 column,
             });
         }
+
+        let tolerance_columns = self.tolerances.iter().map(|tolerance| &tolerance.column);
+        if let Some(column) = first_repeated(tolerance_columns) {
+            return Err(ConfigError::RepeatedTolerance { column });
+        }
+        for tolerance in &self.tolerances {
+            if Tolerance::parse(&tolerance.max_difference).is_none() {
+                return Err(ConfigError::ToleranceNotANumber {
+                    column: tolerance.column.clone(),
+                    value: tolerance.max_difference.clone(),
+                });
+            }
+        }
         Ok(())
+    }
+
+    /// A fingerprint of every setting, recorded in reports so that a report
+    /// can be tied to the exact configuration that produced it.
+    pub fn fingerprint(&self) -> Fingerprint {
+        let json =
+            serde_json::to_vec(self).expect("a Config contains only strings, numbers and booleans");
+        Fingerprint::of_bytes(&json)
     }
 }
 
@@ -163,11 +205,30 @@ pub enum ConfigError {
         left_kind: String,
         right_kind: String,
     },
+
+    #[error("column `{column}` has more than one tolerance")]
+    RepeatedTolerance { column: String },
+
+    #[error(
+        "the tolerance for `{column}` is `{value}`, which is not a plain non-negative number such as \"0.01\""
+    )]
+    ToleranceNotANumber { column: String, value: String },
+
+    #[error(
+        "a tolerance is set for `{column}`, which is not a compared column: it must exist on both sides, be comparable and not be a key"
+    )]
+    ToleranceColumnNotCompared { column: String },
+
+    #[error(
+        "a tolerance is set for `{column}`, which is a {kind} column; tolerances apply to numbers only"
+    )]
+    ToleranceColumnNotNumeric { column: String, kind: String },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::normalize::{NaiveTimestampRule, UnicodeRule};
 
     fn config_error(text: &str) -> ConfigError {
         match Config::from_toml_str(text) {
@@ -217,6 +278,65 @@ mod tests {
         assert_eq!(config.policy.max_changed_rows, 5);
         // Settings that are not mentioned keep their strict default.
         assert!(config.policy.fail_on_missing_keys);
+    }
+
+    #[test]
+    fn normalization_and_tolerances_are_read() {
+        let config = Config::from_toml_str(
+            r#"
+            [comparison]
+            keys = ["id"]
+
+            [normalization]
+            unicode = "nfc"
+            naive_timestamps = "assume_utc"
+
+            [[tolerances]]
+            column = "amount"
+            max_difference = "0.01"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.normalization.unicode, UnicodeRule::Nfc);
+        assert_eq!(
+            config.normalization.naive_timestamps,
+            NaiveTimestampRule::AssumeUtc
+        );
+        assert_eq!(config.tolerances[0].column, "amount");
+    }
+
+    #[test]
+    fn a_tolerance_that_is_not_a_number_is_rejected() {
+        let error = config_error(
+            r#"
+            [comparison]
+            keys = ["id"]
+
+            [[tolerances]]
+            column = "amount"
+            max_difference = "-1"
+            "#,
+        );
+        assert_eq!(
+            error,
+            ConfigError::ToleranceNotANumber {
+                column: "amount".to_string(),
+                value: "-1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn the_fingerprint_changes_when_a_setting_changes() {
+        let strict = Config::from_toml_str("[comparison]\nkeys = [\"id\"]\n").unwrap();
+        let relaxed = Config::from_toml_str(
+            "[comparison]\nkeys = [\"id\"]\n[policy]\nmax_changed_rows = 1\n",
+        )
+        .unwrap();
+
+        assert_eq!(strict.fingerprint(), strict.clone().fingerprint());
+        assert_ne!(strict.fingerprint(), relaxed.fingerprint());
     }
 
     #[test]

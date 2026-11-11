@@ -95,6 +95,11 @@ impl ValueKind {
         Some(kind)
     }
 
+    /// Whether values of this kind are numbers, so a tolerance can apply.
+    pub fn is_numeric(self) -> bool {
+        matches!(self, Self::Integer | Self::Float | Self::Decimal)
+    }
+
     /// Whether a column of this kind may be used as a key.
     ///
     /// Floats are excluded: rounding makes them unreliable identifiers.
@@ -151,6 +156,11 @@ impl NormalizedFloat {
     pub fn as_f64(self) -> f64 {
         f64::from_bits(self.bits)
     }
+
+    /// The normalised IEEE 754 bits, used by the canonical encoding.
+    pub fn bits(self) -> u64 {
+        self.bits
+    }
 }
 
 /// An exact decimal number: `unscaled * 10^(-scale)`.
@@ -188,6 +198,86 @@ impl Decimal {
 
     pub fn scale(self) -> i32 {
         self.scale
+    }
+
+    /// Reads a plain decimal number such as `12`, `-0.5` or `0.010`.
+    ///
+    /// Returns `None` for anything else, including exponents (`1e-3`), a
+    /// missing digit before or after the point (`.5`, `5.`) and numbers too
+    /// large for 128 bits.
+    pub fn parse(text: &str) -> Option<Self> {
+        let (negative, digits) = match text.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, text),
+        };
+        let (whole, fraction) = match digits.split_once('.') {
+            Some((whole, fraction)) => (whole, fraction),
+            None => (digits, ""),
+        };
+
+        let all_digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+        if !all_digits(whole) || (digits.contains('.') && !all_digits(fraction)) {
+            return None;
+        }
+
+        // "12.34" is the integer 1234 with two digits after the point.
+        let unscaled: i128 = format!("{whole}{fraction}").parse().ok()?;
+        let scale = i32::try_from(fraction.len()).ok()?;
+        Some(Self::new(
+            if negative { -unscaled } else { unscaled },
+            scale,
+        ))
+    }
+
+    /// `self - other`, or `None` if the result does not fit in 128 bits.
+    pub fn checked_sub(self, other: Self) -> Option<Self> {
+        // Bring both numbers to the larger scale, then subtract the integers.
+        let scale = self.scale.max(other.scale);
+        let left = self.unscaled_at_scale(scale)?;
+        let right = other.unscaled_at_scale(scale)?;
+        Some(Self::new(left.checked_sub(right)?, scale))
+    }
+
+    /// The absolute value, or `None` if it does not fit in 128 bits.
+    pub fn checked_abs(self) -> Option<Self> {
+        Some(Self {
+            unscaled: self.unscaled.checked_abs()?,
+            scale: self.scale,
+        })
+    }
+
+    /// Whether `self <= other`. `None` if the comparison overflows 128 bits.
+    pub fn is_at_most(self, other: Self) -> Option<bool> {
+        Some(self.checked_sub(other)?.unscaled <= 0)
+    }
+
+    /// The unscaled integer this number would have at a larger `scale`.
+    /// For example 1.5 (15 at scale 1) is 1500 at scale 3.
+    fn unscaled_at_scale(self, scale: i32) -> Option<i128> {
+        let extra_digits = u32::try_from(scale - self.scale).ok()?;
+        let factor = 10_i128.checked_pow(extra_digits)?;
+        self.unscaled.checked_mul(factor)
+    }
+}
+
+impl fmt::Display for Decimal {
+    /// Writes the number in plain notation, for example `-0.05` or `1500`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sign = if self.unscaled < 0 { "-" } else { "" };
+        let digits = self.unscaled.unsigned_abs().to_string();
+
+        if self.scale <= 0 {
+            // A negative scale means trailing zeros: 15 at scale -2 is 1500.
+            let zeros = "0".repeat(self.scale.unsigned_abs() as usize);
+            return write!(f, "{sign}{digits}{zeros}");
+        }
+
+        let scale = self.scale as usize;
+        // Pad with leading zeros so there is at least one digit before the
+        // point: 5 at scale 2 becomes "005", shown as 0.05.
+        let digits = format!("{digits:0>width$}", width = scale + 1);
+        let (whole, fraction) = digits.split_at(digits.len() - scale);
+        write!(f, "{sign}{whole}.{fraction}")
     }
 }
 
@@ -347,6 +437,39 @@ mod tests {
 
         let zero = Decimal::new(0, 4);
         assert_eq!((zero.unscaled(), zero.scale()), (0, 0));
+    }
+
+    #[test]
+    fn decimal_parses_plain_numbers_only() {
+        assert_eq!(Decimal::parse("0.01"), Some(Decimal::new(1, 2)));
+        assert_eq!(Decimal::parse("-12.50"), Some(Decimal::new(-125, 1)));
+        assert_eq!(Decimal::parse("7"), Some(Decimal::new(7, 0)));
+
+        for invalid in ["", "-", ".5", "5.", "1e-3", "1,5", "abc", "+1", "1.2.3"] {
+            assert_eq!(Decimal::parse(invalid), None, "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn decimal_displays_in_plain_notation() {
+        for text in ["0", "7", "-0.05", "12.5", "1500", "-2750.6"] {
+            assert_eq!(Decimal::parse(text).unwrap().to_string(), text);
+        }
+    }
+
+    #[test]
+    fn decimal_subtraction_aligns_scales() {
+        let difference = Decimal::parse("2750.60")
+            .unwrap()
+            .checked_sub(Decimal::parse("2750.5").unwrap());
+        assert_eq!(difference, Decimal::parse("0.1"));
+    }
+
+    #[test]
+    fn decimal_arithmetic_reports_overflow_instead_of_wrapping() {
+        let huge = Decimal::new(i128::MAX, 0);
+        assert_eq!(huge.checked_sub(Decimal::new(-1, 0)), None);
+        assert_eq!(huge.checked_sub(Decimal::new(1, 30)), None);
     }
 
     #[test]
