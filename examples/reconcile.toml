@@ -1,0 +1,29 @@
+# Example configuration for the sample files in tests/fixtures/.
+#
+#   cargo run -- rowdiff \
+#     --left tests/fixtures/legacy_trades.parquet \
+#     --right tests/fixtures/new_trades.parquet \
+#     --config examples/reconcile.toml
+
+[comparison]
+# The columns that identify a row. A mapped column is named by its
+# right-side name.
+keys = ["trade_id"]
+# strict (default): any schema difference fails.
+# compatible: harmless differences warn instead.
+schema_policy = "compatible"
+
+# The left column `trade_amt` and the right column `trade_amount` are the
+# same logical column. Renames are never guessed.
+[[column_mappings]]
+left = "trade_amt"
+right = "trade_amount"
+
+# Every setting below shows its default, which is always the strict choice.
+[policy]
+fail_on_missing_keys = true      # a key exists only on the left
+fail_on_extra_keys = true        # a key exists only on the right
+fail_on_duplicate_keys = true    # a key appears on more than one row
+fail_on_null_keys = true         # a key column contains NULL
+max_changed_rows = 0             # matched rows allowed to differ
+strict_on_inconclusive = true    # a column could not be compared

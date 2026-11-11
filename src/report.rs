@@ -11,44 +11,143 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::error::Error;
-use crate::policy::{self, SchemaFinding, SchemaPolicy, Verdict};
+use crate::plan::ComparisonPlan;
+use crate::policy::{self, RowFinding, RowPolicy, SchemaFinding, SchemaPolicy, Verdict};
+use crate::rowdiff::{RowCounts, RowDiff};
 use crate::schema::{self, Column, LogicalSchema, SchemaDifference};
 
 /// Bumped whenever the JSON layout of a report changes.
 pub const REPORT_VERSION: u32 = 1;
 
-/// The result of comparing two schemas under a policy.
+/// The result of a reconciliation.
 #[derive(Debug, Clone, Serialize)]
-pub struct SchemaReport {
+pub struct Report {
     pub report_version: u32,
-    pub schema_policy: SchemaPolicy,
+    /// The worst verdict of all sections.
+    pub verdict: Verdict,
+    pub schema: SchemaSection,
+    /// Absent when only the schemas were compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<RowSection>,
+}
+
+/// How the two schemas differ and what the schema policy says about it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SchemaSection {
+    pub policy: SchemaPolicy,
     pub verdict: Verdict,
     pub findings: Vec<SchemaFinding>,
     pub left_columns: Vec<Column>,
     pub right_columns: Vec<Column>,
 }
 
-impl SchemaReport {
+/// How the rows differ and what the row policy says about it.
+#[derive(Debug, Clone, Serialize)]
+pub struct RowSection {
+    pub verdict: Verdict,
+    pub keys: Vec<String>,
+    pub counts: RowCounts,
+    /// One finding per row check, including the checks that passed.
+    pub findings: Vec<RowFinding>,
+    /// Every non-key column that exists on both sides, sorted by name.
+    pub columns: Vec<ColumnResult>,
+}
+
+/// What happened to one column during the row comparison.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ColumnResult {
+    /// The column was compared on every compared row.
+    Compared { column: String, mismatches: u64 },
+    /// The column could not be compared; `reason` says why.
+    Inconclusive { column: String, reason: String },
+}
+
+impl ColumnResult {
+    fn column(&self) -> &str {
+        match self {
+            Self::Compared { column, .. } | Self::Inconclusive { column, .. } => column,
+        }
+    }
+}
+
+impl SchemaSection {
     /// Diffs the two schemas and judges every difference under `policy`.
-    pub fn new(left: LogicalSchema, right: LogicalSchema, policy: SchemaPolicy) -> Self {
-        let differences = schema::diff_schemas(&left, &right);
+    pub fn new(left: &LogicalSchema, right: &LogicalSchema, policy: SchemaPolicy) -> Self {
+        let differences = schema::diff_schemas(left, right);
         let findings = policy::evaluate_schema(differences, policy);
         let verdict = policy::overall_schema_verdict(&findings);
 
         Self {
-            report_version: REPORT_VERSION,
-            schema_policy: policy,
+            policy,
             verdict,
             findings,
             left_columns: left.columns().to_vec(),
             right_columns: right.columns().to_vec(),
         }
     }
+}
+
+impl RowSection {
+    /// Judges the observed row differences under `policy`.
+    pub fn new(plan: &ComparisonPlan, diff: &RowDiff, policy: &RowPolicy) -> Self {
+        let counts = diff.counts();
+        let findings =
+            policy::evaluate_rows(&counts, plan.inconclusive_columns.len() as u64, policy);
+        let verdict = policy::worst_verdict(findings.iter().map(|finding| finding.verdict));
+
+        let compared =
+            diff.column_mismatches
+                .iter()
+                .map(|(column, mismatches)| ColumnResult::Compared {
+                    column: column.clone(),
+                    mismatches: *mismatches,
+                });
+        let inconclusive =
+            plan.inconclusive_columns
+                .iter()
+                .map(|inconclusive| ColumnResult::Inconclusive {
+                    column: inconclusive.column.clone(),
+                    reason: inconclusive.reason.to_string(),
+                });
+        let mut columns: Vec<ColumnResult> = compared.chain(inconclusive).collect();
+        columns.sort_by(|a, b| a.column().cmp(b.column()));
+
+        Self {
+            verdict,
+            keys: plan.keys.clone(),
+            counts,
+            findings,
+            columns,
+        }
+    }
+}
+
+impl Report {
+    /// A report that covers the schemas only.
+    pub fn schema_only(schema: SchemaSection) -> Self {
+        Self {
+            report_version: REPORT_VERSION,
+            verdict: schema.verdict,
+            schema,
+            rows: None,
+        }
+    }
+
+    /// A report that covers the schemas and the rows.
+    pub fn new(schema: SchemaSection, rows: RowSection) -> Self {
+        Self {
+            report_version: REPORT_VERSION,
+            verdict: schema.verdict.max(rows.verdict),
+            schema,
+            rows: Some(rows),
+        }
+    }
 
     /// The report as pretty-printed JSON, ending with a newline.
     pub fn to_json(&self) -> String {
         let mut json = serde_json::to_string_pretty(self)
-            .expect("a SchemaReport contains only strings, numbers and booleans");
+            .expect("a Report contains only strings, numbers and booleans");
         json.push('\n');
         json
     }
@@ -61,39 +160,80 @@ impl SchemaReport {
         })
     }
 
-    /// A short plain-text summary for the terminal.
+    /// A plain-text summary for the terminal.
     pub fn to_text(&self) -> String {
         let mut text = String::new();
-
-        // Writing to a String cannot fail, so the results are ignored.
-        let _ = writeln!(
-            text,
-            "Schema: {} (policy: {})",
-            self.verdict, self.schema_policy
-        );
-        let _ = writeln!(
-            text,
-            "Columns: {} left, {} right",
-            self.left_columns.len(),
-            self.right_columns.len()
-        );
-
-        if self.findings.is_empty() {
-            let _ = writeln!(text, "No schema differences.");
-            return text;
-        }
-
-        for finding in &self.findings {
+        // Writing to a String cannot fail, so the results are ignored here
+        // and in the helper functions below.
+        let _ = writeln!(text, "Verdict: {}", self.verdict);
+        let _ = writeln!(text);
+        write_schema_text(&mut text, &self.schema);
+        if let Some(rows) = &self.rows {
             let _ = writeln!(text);
-            let _ = writeln!(
-                text,
-                "{}  {}",
-                finding.verdict,
-                describe_difference(&finding.difference)
-            );
-            let _ = writeln!(text, "      {}", finding.explanation);
+            write_rows_text(&mut text, rows);
         }
         text
+    }
+}
+
+fn write_schema_text(text: &mut String, schema: &SchemaSection) {
+    let _ = writeln!(
+        text,
+        "Schema: {} (policy: {})",
+        schema.verdict, schema.policy
+    );
+    let _ = writeln!(
+        text,
+        "  {} left columns, {} right columns",
+        schema.left_columns.len(),
+        schema.right_columns.len()
+    );
+
+    if schema.findings.is_empty() {
+        let _ = writeln!(text, "  No schema differences.");
+    }
+    for finding in &schema.findings {
+        let _ = writeln!(
+            text,
+            "  {:<12}  {}",
+            finding.verdict,
+            describe_difference(&finding.difference)
+        );
+        let _ = writeln!(text, "  {:<12}  {}", "", finding.explanation);
+    }
+}
+
+fn write_rows_text(text: &mut String, rows: &RowSection) {
+    let counts = &rows.counts;
+    let _ = writeln!(
+        text,
+        "Rows: {} (keys: {})",
+        rows.verdict,
+        rows.keys.join(", ")
+    );
+    let _ = writeln!(
+        text,
+        "  {} left rows, {} right rows, {} matched keys, {} rows compared",
+        counts.left_rows, counts.right_rows, counts.matched_keys, counts.compared_rows
+    );
+    for finding in &rows.findings {
+        let _ = writeln!(text, "  {:<12}  {}", finding.verdict, finding.explanation);
+    }
+
+    let _ = writeln!(text);
+    let _ = writeln!(text, "Columns:");
+    if rows.columns.is_empty() {
+        let _ = writeln!(text, "  No columns besides the keys exist on both sides.");
+    }
+    for column in &rows.columns {
+        match column {
+            ColumnResult::Compared { column, mismatches } => {
+                let _ = writeln!(text, "  `{column}`: {mismatches} mismatch(es)");
+            }
+            ColumnResult::Inconclusive { column, reason } => {
+                let _ = writeln!(text, "  `{column}`: not compared, {reason}");
+            }
+        }
     }
 }
 

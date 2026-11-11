@@ -2,6 +2,8 @@
 source: tests/cli_cases.rs
 expression: stdout(&output)
 ---
+Verdict: PASS
+
 Schema: PASS (policy: strict)
-Columns: 7 left, 7 right
-No schema differences.
+  7 left columns, 7 right columns
+  No schema differences.
