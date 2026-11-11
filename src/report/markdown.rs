@@ -15,8 +15,10 @@ pub fn render(report: &Report) -> String {
     let _ = writeln!(md, "# Reconciliation report");
     let _ = writeln!(md);
     let _ = writeln!(md, "**Verdict: {}**", report.verdict);
-    let _ = writeln!(md);
-    write_schema(&mut md, &report.schema);
+    if let Some(schema) = &report.schema {
+        let _ = writeln!(md);
+        write_schema(&mut md, schema);
+    }
     if let Some(rows) = &report.rows {
         let _ = writeln!(md);
         write_rows(&mut md, rows);

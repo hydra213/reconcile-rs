@@ -12,8 +12,10 @@ use super::{ColumnResult, FingerprintSection, Report, RowSection, SchemaSection}
 pub fn render(report: &Report) -> String {
     let mut text = String::new();
     let _ = writeln!(text, "Verdict: {}", report.verdict);
-    let _ = writeln!(text);
-    write_schema(&mut text, &report.schema);
+    if let Some(schema) = &report.schema {
+        let _ = writeln!(text);
+        write_schema(&mut text, schema);
+    }
     if let Some(rows) = &report.rows {
         let _ = writeln!(text);
         write_rows(&mut text, rows);

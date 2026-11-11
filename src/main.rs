@@ -11,10 +11,11 @@ use std::time::Instant;
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 
-use reconcilers::Config;
+use reconcilers::parquet_input::InputFile;
 use reconcilers::policy::{SchemaPolicy, Verdict};
 use reconcilers::report::Report;
 use reconcilers::run::{RunFile, RunMetadata, TOOL_VERSION};
+use reconcilers::{Config, Reconciliation};
 
 /// Exit code when the comparison ran and the policy holds.
 const EXIT_PASS: u8 = 0;
@@ -41,8 +42,10 @@ struct Cli {
 enum Command {
     /// Compare the schemas of two Parquet datasets.
     Schema(SchemaArgs),
-    /// Compare the schemas and rows of two Parquet datasets.
-    Rowdiff(RowdiffArgs),
+    /// Compare the rows of two Parquet datasets by key. Schemas are not judged.
+    Rowdiff(ConfiguredArgs),
+    /// Run the full reconciliation: schemas, rows and fingerprints.
+    Compare(ConfiguredArgs),
 }
 
 #[derive(clap::Args)]
@@ -55,8 +58,9 @@ struct SchemaArgs {
     policy: PolicyArg,
 }
 
+/// The arguments of the commands that read rows: `rowdiff` and `compare`.
 #[derive(clap::Args)]
-struct RowdiffArgs {
+struct ConfiguredArgs {
     #[command(flatten)]
     datasets: DatasetArgs,
 
@@ -118,6 +122,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Schema(args) => run_schema(args),
         Command::Rowdiff(args) => run_rowdiff(args),
+        Command::Compare(args) => run_compare(args),
     }
     .and_then(|outcome| finish(outcome, started_at, stopwatch));
 
@@ -178,29 +183,53 @@ fn run_schema(args: SchemaArgs) -> anyhow::Result<Outcome> {
     })
 }
 
-fn run_rowdiff(args: RowdiffArgs) -> anyhow::Result<Outcome> {
-    let RowdiffArgs { datasets, config } = args;
+fn run_rowdiff(args: ConfiguredArgs) -> anyhow::Result<Outcome> {
+    let ConfiguredArgs { datasets, config } = args;
 
     let settings = Config::from_toml_file(&config).context("row comparison could not run")?;
-    let reconciliation = reconcilers::compare_parquet(&settings, &datasets.left, &datasets.right)
-        .context("row comparison could not run")?;
+    let reconciliation =
+        reconcilers::compare_parquet_rows(&settings, &datasets.left, &datasets.right)
+            .context("row comparison could not run")?;
 
-    Ok(Outcome {
+    Ok(outcome_with_config(
+        "rowdiff",
+        reconciliation,
+        config,
+        datasets.out_dir,
+    ))
+}
+
+fn run_compare(args: ConfiguredArgs) -> anyhow::Result<Outcome> {
+    let ConfiguredArgs { datasets, config } = args;
+
+    let settings = Config::from_toml_file(&config).context("comparison could not run")?;
+    let reconciliation = reconcilers::compare_parquet(&settings, &datasets.left, &datasets.right)
+        .context("comparison could not run")?;
+
+    Ok(outcome_with_config(
+        "compare",
+        reconciliation,
+        config,
+        datasets.out_dir,
+    ))
+}
+
+/// The outcome of a command that read a configuration file and whole files.
+fn outcome_with_config(
+    command: &'static str,
+    reconciliation: Reconciliation,
+    config_file: PathBuf,
+    out_dir: Option<PathBuf>,
+) -> Outcome {
+    let run_files = |files: &[InputFile]| files.iter().map(RunFile::from).collect();
+    Outcome {
+        command,
+        config_file: Some(config_file),
+        left_files: run_files(&reconciliation.left_files),
+        right_files: run_files(&reconciliation.right_files),
         report: reconciliation.report,
-        command: "rowdiff",
-        config_file: Some(config),
-        left_files: reconciliation
-            .left_files
-            .iter()
-            .map(RunFile::from)
-            .collect(),
-        right_files: reconciliation
-            .right_files
-            .iter()
-            .map(RunFile::from)
-            .collect(),
-        out_dir: datasets.out_dir,
-    })
+        out_dir,
+    }
 }
 
 /// Writes the three output files into `out_dir`.

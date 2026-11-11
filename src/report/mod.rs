@@ -30,16 +30,26 @@ use samples::Samples;
 pub const REPORT_VERSION: u32 = 1;
 
 /// The result of a reconciliation.
+///
+/// Which sections are present depends on what was compared:
+///
+/// | Built by                 | `schema` | `rows` | `fingerprints` |
+/// |--------------------------|----------|--------|----------------|
+/// | [`Report::schema_only`]  | yes      |        |                |
+/// | [`Report::rows_only`]    |          | yes    |                |
+/// | [`Report::new`]          | yes      | yes    | yes            |
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
     pub report_version: u32,
-    /// The worst verdict of all sections.
+    /// The worst verdict of the sections that are present.
     pub verdict: Verdict,
-    pub schema: SchemaSection,
+    /// Absent when only the rows were compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<SchemaSection>,
     /// Absent when only the schemas were compared.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<RowSection>,
-    /// Absent when only the schemas were compared.
+    /// Present only when both the schemas and the rows were compared.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprints: Option<FingerprintSection>,
 }
@@ -229,8 +239,19 @@ impl Report {
         Self {
             report_version: REPORT_VERSION,
             verdict: schema.verdict,
-            schema,
+            schema: Some(schema),
             rows: None,
+            fingerprints: None,
+        }
+    }
+
+    /// A report that covers the rows only. The schemas are not judged.
+    pub fn rows_only(rows: RowSection) -> Self {
+        Self {
+            report_version: REPORT_VERSION,
+            verdict: rows.verdict,
+            schema: None,
+            rows: Some(rows),
             fingerprints: None,
         }
     }
@@ -240,7 +261,7 @@ impl Report {
         Self {
             report_version: REPORT_VERSION,
             verdict: schema.verdict.max(rows.verdict),
-            schema,
+            schema: Some(schema),
             rows: Some(rows),
             fingerprints: Some(fingerprints),
         }

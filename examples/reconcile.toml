@@ -1,6 +1,6 @@
 # Example configuration for the sample files in tests/fixtures/.
 #
-#   cargo run -- rowdiff \
+#   cargo run -- compare \
 #     --left tests/fixtures/legacy_trades.parquet \
 #     --right tests/fixtures/new_trades.parquet \
 #     --config examples/reconcile.toml
@@ -9,6 +9,7 @@
 # The columns that identify a row. A mapped column is named by its
 # right-side name.
 keys = ["trade_id"]
+# Used by `compare`; `rowdiff` does not judge schemas.
 # strict (default): any schema difference fails.
 # compatible: harmless differences warn instead.
 schema_policy = "compatible"

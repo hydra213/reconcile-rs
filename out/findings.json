@@ -1,0 +1,264 @@
+{
+  "report_version": 1,
+  "verdict": "fail",
+  "schema": {
+    "policy": "strict",
+    "verdict": "fail",
+    "findings": [
+      {
+        "kind": "column_added",
+        "column": "desk",
+        "rule": "strict_requires_identical_schema",
+        "verdict": "fail",
+        "explanation": "The strict policy requires both schemas to be identical."
+      },
+      {
+        "kind": "type_changed",
+        "column": "price",
+        "left": "Decimal128(18, 4)",
+        "right": "Float64",
+        "rule": "strict_requires_identical_schema",
+        "verdict": "fail",
+        "explanation": "The strict policy requires both schemas to be identical."
+      },
+      {
+        "kind": "type_changed",
+        "column": "quantity",
+        "left": "Int32",
+        "right": "Int64",
+        "rule": "strict_requires_identical_schema",
+        "verdict": "fail",
+        "explanation": "The strict policy requires both schemas to be identical."
+      },
+      {
+        "kind": "column_added",
+        "column": "trade_amount",
+        "rule": "strict_requires_identical_schema",
+        "verdict": "fail",
+        "explanation": "The strict policy requires both schemas to be identical."
+      },
+      {
+        "kind": "column_removed",
+        "column": "trade_amt",
+        "rule": "strict_requires_identical_schema",
+        "verdict": "fail",
+        "explanation": "The strict policy requires both schemas to be identical."
+      }
+    ],
+    "left_columns": [
+      {
+        "name": "booked_at",
+        "data_type": "Timestamp(µs, \"UTC\")",
+        "nullable": true
+      },
+      {
+        "name": "business_date",
+        "data_type": "Date32",
+        "nullable": false
+      },
+      {
+        "name": "currency",
+        "data_type": "Utf8",
+        "nullable": true
+      },
+      {
+        "name": "price",
+        "data_type": "Decimal128(18, 4)",
+        "nullable": true
+      },
+      {
+        "name": "quantity",
+        "data_type": "Int32",
+        "nullable": true
+      },
+      {
+        "name": "trade_amt",
+        "data_type": "Decimal128(18, 2)",
+        "nullable": true
+      },
+      {
+        "name": "trade_id",
+        "data_type": "Int64",
+        "nullable": false
+      }
+    ],
+    "right_columns": [
+      {
+        "name": "booked_at",
+        "data_type": "Timestamp(µs, \"UTC\")",
+        "nullable": true
+      },
+      {
+        "name": "business_date",
+        "data_type": "Date32",
+        "nullable": false
+      },
+      {
+        "name": "currency",
+        "data_type": "Utf8",
+        "nullable": true
+      },
+      {
+        "name": "desk",
+        "data_type": "Utf8",
+        "nullable": true
+      },
+      {
+        "name": "price",
+        "data_type": "Float64",
+        "nullable": true
+      },
+      {
+        "name": "quantity",
+        "data_type": "Int64",
+        "nullable": true
+      },
+      {
+        "name": "trade_amount",
+        "data_type": "Decimal128(18, 2)",
+        "nullable": true
+      },
+      {
+        "name": "trade_id",
+        "data_type": "Int64",
+        "nullable": false
+      }
+    ]
+  },
+  "rows": {
+    "verdict": "fail",
+    "keys": [
+      "trade_id"
+    ],
+    "counts": {
+      "left_rows": 5,
+      "right_rows": 5,
+      "null_key_rows_left": 0,
+      "null_key_rows_right": 0,
+      "duplicate_keys_left": 0,
+      "duplicate_keys_right": 0,
+      "left_only_keys": 1,
+      "right_only_keys": 1,
+      "matched_keys": 4,
+      "compared_rows": 4,
+      "changed_rows": 0,
+      "unchanged_rows": 4
+    },
+    "findings": [
+      {
+        "check": "missing_keys",
+        "observed": 1,
+        "allowed": 0,
+        "verdict": "fail",
+        "explanation": "1 key(s) exist only on the left side; at most 0 allowed (fail_on_missing_keys = true)."
+      },
+      {
+        "check": "extra_keys",
+        "observed": 1,
+        "allowed": 0,
+        "verdict": "fail",
+        "explanation": "1 key(s) exist only on the right side; at most 0 allowed (fail_on_extra_keys = true)."
+      },
+      {
+        "check": "duplicate_keys",
+        "observed": 0,
+        "allowed": 0,
+        "verdict": "pass",
+        "explanation": "0 key(s) appear on more than one row; at most 0 allowed (fail_on_duplicate_keys = true)."
+      },
+      {
+        "check": "null_keys",
+        "observed": 0,
+        "allowed": 0,
+        "verdict": "pass",
+        "explanation": "0 row(s) have NULL in a key column; at most 0 allowed (fail_on_null_keys = true)."
+      },
+      {
+        "check": "changed_rows",
+        "observed": 0,
+        "allowed": 0,
+        "verdict": "pass",
+        "explanation": "0 matched row(s) have changed values; at most 0 allowed (max_changed_rows = 0)."
+      },
+      {
+        "check": "inconclusive_columns",
+        "observed": 1,
+        "allowed": 0,
+        "verdict": "inconclusive",
+        "explanation": "1 column(s) could not be compared; at most 0 allowed (strict_on_inconclusive = true)."
+      }
+    ],
+    "columns": [
+      {
+        "status": "compared",
+        "column": "booked_at",
+        "mismatches": 0,
+        "within_tolerance": 0
+      },
+      {
+        "status": "compared",
+        "column": "business_date",
+        "mismatches": 0,
+        "within_tolerance": 0
+      },
+      {
+        "status": "compared",
+        "column": "currency",
+        "mismatches": 0,
+        "within_tolerance": 0
+      },
+      {
+        "status": "inconclusive",
+        "column": "price",
+        "reason": "the left side is a decimal and the right side is a float; comparing them needs an explicit rule"
+      },
+      {
+        "status": "compared",
+        "column": "quantity",
+        "mismatches": 0,
+        "within_tolerance": 0
+      }
+    ],
+    "samples": {
+      "limit": 10,
+      "values_shown": true,
+      "left_only_keys": [
+        {
+          "key_fingerprint": "c46d15685335e23d10bd438ee493e905b77613d897c09d71d08f178a4397b2bf",
+          "key": [
+            "1004"
+          ]
+        }
+      ],
+      "right_only_keys": [
+        {
+          "key_fingerprint": "08310d95335632354c409e48b81faaef346ee12b3ef89d619b0e229e37c29dd2",
+          "key": [
+            "1006"
+          ]
+        }
+      ],
+      "duplicate_keys_left": [],
+      "duplicate_keys_right": [],
+      "changed_rows": []
+    }
+  },
+  "fingerprints": {
+    "algorithm": "blake3",
+    "canonical_version": 1,
+    "normalization": {
+      "unicode": "none",
+      "naive_timestamps": "distinct"
+    },
+    "configuration": "5037a22164d671c723205db9e7e4a142be81e4d857638dac6d548fdf30f379ec",
+    "left": {
+      "schema": "0c3e0be95382207a24ebea864fd11176b01692fb0237b74ccb9f529242772657",
+      "content": "bf94de5fb7c4f49fa303b91fde7b62781920b92837c51b1dd27aa38603885355"
+    },
+    "right": {
+      "schema": "09ddcc88ed40362f846645351df357c4f8e568b8f3e710512bf65c7d32e137c1",
+      "content": "3ccdc75cb9ec9ce90fba86b02453b08ae168154ff094f162dd46f6fd4e9a8e75"
+    },
+    "content_matches": false
+  }
+}

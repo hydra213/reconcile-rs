@@ -34,8 +34,10 @@ renderings come from one `Report` value, so they cannot disagree.
 
 ### One report shape
 
-`reconcilers schema` and `reconcilers rowdiff` both produce a `Report`. The
-schema-only report simply has no `rows` and no `fingerprints` section.
+`reconcilers schema`, `reconcilers rowdiff` and `reconcilers compare` all
+produce a `Report`. Each section is present only when the command covers
+it: `schema` writes the `schema` section, `rowdiff` writes the `rows`
+section, and `compare` writes both plus `fingerprints`.
 `report_version` is bumped whenever the JSON layout changes.
 
 ### Verdicts and exit codes

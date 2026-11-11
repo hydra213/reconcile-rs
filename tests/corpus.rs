@@ -20,7 +20,7 @@ use common::{batch, write_parquet, write_parquet_in_row_groups};
 use reconcilers::fingerprint::Fingerprint;
 use reconcilers::parquet_input::read_dataset;
 use reconcilers::policy::{RowCheck, SchemaRule, Verdict};
-use reconcilers::report::{ColumnResult, Report, RowSection};
+use reconcilers::report::{ColumnResult, Report, RowSection, SchemaSection};
 use reconcilers::{Config, compare_parquet};
 
 const KEYED_ON_ID: &str = "[comparison]\nkeys = [\"id\"]\n";
@@ -69,6 +69,10 @@ fn compare(case: &str, config: &str, left: &RecordBatch, right: &RecordBatch) ->
         .report
 }
 
+fn schema(report: &Report) -> &SchemaSection {
+    report.schema.as_ref().expect("schemas were compared")
+}
+
 fn rows(report: &Report) -> &RowSection {
     report.rows.as_ref().expect("rows were compared")
 }
@@ -103,8 +107,7 @@ fn check_verdict(report: &Report, check: RowCheck) -> Verdict {
 }
 
 fn schema_rules(report: &Report) -> Vec<(&str, SchemaRule)> {
-    report
-        .schema
+    schema(report)
         .findings
         .iter()
         .map(|finding| (finding.difference.column(), finding.rule))
@@ -241,7 +244,7 @@ fn case_05_extra_and_missing_columns_and_a_mapped_rename() {
             ("legacy_flag", SchemaRule::ColumnRemoved),
         ]
     );
-    assert_eq!(report.schema.verdict, Verdict::Fail);
+    assert_eq!(schema(&report).verdict, Verdict::Fail);
     // The renamed column is compared under its right-side name.
     assert_eq!(mismatches(&report, "amount"), 0);
     assert_eq!(rows(&report).verdict, Verdict::Pass);

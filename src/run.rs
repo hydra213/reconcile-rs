@@ -18,7 +18,7 @@ use crate::parquet_input::InputFile;
 pub struct RunMetadata {
     /// The version of this crate that produced the report.
     pub tool_version: &'static str,
-    /// The subcommand that ran, for example `rowdiff`.
+    /// The subcommand that ran, for example `compare`.
     pub command: String,
     /// When the run started, in UTC, as an RFC 3339 timestamp.
     pub started_at: String,

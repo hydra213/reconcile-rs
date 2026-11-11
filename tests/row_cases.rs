@@ -9,7 +9,7 @@ mod common;
 use common::{accounts, accounts_with_float_balance, write_parquet};
 use reconcilers::policy::Verdict;
 use reconcilers::report::{ColumnResult, Report};
-use reconcilers::{Config, Error, compare_parquet};
+use reconcilers::{Config, Error, compare_parquet, compare_parquet_rows};
 
 const KEYED_ON_ID: &str = "[comparison]\nkeys = [\"id\"]\n";
 
@@ -36,6 +36,22 @@ fn identical_files_pass() {
 
     assert_eq!(report.verdict, Verdict::Pass);
     assert_eq!(row_counts(&report).unchanged_rows, 2);
+}
+
+#[test]
+fn comparing_rows_only_leaves_out_the_schema_and_fingerprints() {
+    let rows = [(Some(1), Some("ann"), Some(100))];
+    let left = write_parquet("rows_only_left.parquet", &accounts(&rows));
+    let right = write_parquet("rows_only_right.parquet", &accounts(&rows));
+
+    let report = compare_parquet_rows(&config(KEYED_ON_ID), &[left], &[right])
+        .unwrap()
+        .report;
+
+    assert_eq!(report.verdict, Verdict::Pass);
+    assert_eq!(row_counts(&report).unchanged_rows, 1);
+    assert!(report.schema.is_none());
+    assert!(report.fingerprints.is_none());
 }
 
 #[test]

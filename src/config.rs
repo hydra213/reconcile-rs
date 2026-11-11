@@ -43,6 +43,8 @@ pub struct ComparisonConfig {
     /// The columns that identify a row, in order. A mapped column is named
     /// by its right-side name.
     pub keys: Vec<String>,
+    /// How the schemas are judged by the full comparison. A rows-only
+    /// comparison does not judge schemas and ignores this setting.
     #[serde(default)]
     pub schema_policy: SchemaPolicy,
 }

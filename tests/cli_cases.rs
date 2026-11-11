@@ -5,8 +5,10 @@ mod common;
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::Arc;
 
-use common::{shops_with_opening_time, write_parquet};
+use arrow::array::{Int64Array, StringArray};
+use common::{batch, shops_with_opening_time, write_parquet};
 
 const LEGACY: &str = "tests/fixtures/legacy_trades.parquet";
 const NEW: &str = "tests/fixtures/new_trades.parquet";
@@ -82,9 +84,9 @@ fn a_file_that_is_not_parquet_is_an_execution_error_with_exit_code_2() {
 }
 
 #[test]
-fn rowdiff_on_the_sample_files_fails_with_exit_code_1() {
+fn compare_on_the_sample_files_fails_with_exit_code_1() {
     let output = reconcilers(&[
-        "rowdiff", "--left", LEGACY, "--right", NEW, "--config", CONFIG,
+        "compare", "--left", LEGACY, "--right", NEW, "--config", CONFIG,
     ]);
 
     assert_eq!(output.status.code(), Some(1));
@@ -93,13 +95,13 @@ fn rowdiff_on_the_sample_files_fails_with_exit_code_1() {
 
 #[test]
 fn findings_are_byte_identical_across_runs_and_run_metadata_is_separate() {
-    let first = out_dir("rowdiff_first");
-    let second = out_dir("rowdiff_second");
+    let first = out_dir("compare_first");
+    let second = out_dir("compare_second");
 
     for dir in [&first, &second] {
         let dir = dir.to_str().expect("the temp path should be UTF-8");
         reconcilers(&[
-            "rowdiff",
+            "compare",
             "--left",
             LEGACY,
             "--right",
@@ -152,7 +154,7 @@ fn schema_command_also_writes_the_output_files() {
 #[test]
 fn showing_values_puts_real_keys_in_the_report() {
     let output = reconcilers(&[
-        "rowdiff",
+        "compare",
         "--left",
         LEGACY,
         "--right",
@@ -169,7 +171,7 @@ fn showing_values_puts_real_keys_in_the_report() {
 #[test]
 fn values_are_hidden_from_the_report_by_default() {
     let output = reconcilers(&[
-        "rowdiff", "--left", LEGACY, "--right", NEW, "--config", CONFIG,
+        "compare", "--left", LEGACY, "--right", NEW, "--config", CONFIG,
     ]);
     let text = stdout(&output);
 
@@ -179,9 +181,9 @@ fn values_are_hidden_from_the_report_by_default() {
 }
 
 #[test]
-fn rowdiff_with_a_missing_config_is_an_execution_error_with_exit_code_2() {
+fn compare_with_a_missing_config_is_an_execution_error_with_exit_code_2() {
     let output = reconcilers(&[
-        "rowdiff",
+        "compare",
         "--left",
         LEGACY,
         "--right",
@@ -197,7 +199,7 @@ fn rowdiff_with_a_missing_config_is_an_execution_error_with_exit_code_2() {
 }
 
 #[test]
-fn rowdiff_that_is_only_inconclusive_exits_with_code_3() {
+fn compare_that_is_only_inconclusive_exits_with_code_3() {
     // A file compared with itself has no differences. But the engine has no
     // comparison rule for time-of-day columns yet, so it must not claim the
     // `opens_at` column is equal.
@@ -205,7 +207,7 @@ fn rowdiff_that_is_only_inconclusive_exits_with_code_3() {
     let file = file.to_str().expect("the temp path should be UTF-8");
 
     let output = reconcilers(&[
-        "rowdiff",
+        "compare",
         "--left",
         file,
         "--right",
@@ -216,4 +218,74 @@ fn rowdiff_that_is_only_inconclusive_exits_with_code_3() {
 
     assert_eq!(output.status.code(), Some(3));
     insta::assert_snapshot!(stdout(&output));
+}
+
+#[test]
+fn rowdiff_on_the_sample_files_reports_the_rows_only() {
+    let output = reconcilers(&[
+        "rowdiff", "--left", LEGACY, "--right", NEW, "--config", CONFIG,
+    ]);
+    let text = stdout(&output);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!text.contains("Schema:"), "rowdiff does not judge schemas");
+    assert!(!text.contains("Fingerprints:"));
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn rowdiff_passes_where_compare_fails_on_a_schema_difference() {
+    // The rows agree on every shared column, but the right file has one
+    // more column. Only `compare` judges that.
+    let left = batch(vec![
+        ("id", Arc::new(Int64Array::from(vec![1, 2]))),
+        ("owner", Arc::new(StringArray::from(vec!["ann", "bob"]))),
+    ]);
+    let right = batch(vec![
+        ("id", Arc::new(Int64Array::from(vec![1, 2]))),
+        ("owner", Arc::new(StringArray::from(vec!["ann", "bob"]))),
+        (
+            "region",
+            Arc::new(StringArray::from(vec!["north", "south"])),
+        ),
+    ]);
+    let left = write_parquet("cli_added_column_left.parquet", &left);
+    let right = write_parquet("cli_added_column_right.parquet", &right);
+    let left = left.to_str().expect("the temp path should be UTF-8");
+    let right = right.to_str().expect("the temp path should be UTF-8");
+    let config = "tests/fixtures/keyed_on_id.toml";
+
+    let rowdiff = reconcilers(&[
+        "rowdiff", "--left", left, "--right", right, "--config", config,
+    ]);
+    let compare = reconcilers(&[
+        "compare", "--left", left, "--right", right, "--config", config,
+    ]);
+
+    assert_eq!(rowdiff.status.code(), Some(0));
+    assert!(stdout(&rowdiff).starts_with("Verdict: PASS"));
+    assert_eq!(compare.status.code(), Some(1));
+    assert!(stdout(&compare).contains("`region` exists only on the right side"));
+}
+
+#[test]
+fn rowdiff_command_writes_findings_without_a_schema_section() {
+    let dir = out_dir("rowdiff_outputs");
+    reconcilers(&[
+        "rowdiff",
+        "--left",
+        LEGACY,
+        "--right",
+        NEW,
+        "--config",
+        CONFIG,
+        "--out-dir",
+        dir.to_str().expect("the temp path should be UTF-8"),
+    ]);
+
+    let findings = read(dir.join("findings.json"));
+    assert!(findings.contains("\"rows\""));
+    assert!(!findings.contains("\"schema\""));
+    assert!(!findings.contains("\"fingerprints\""));
+    assert!(read(dir.join("run.json")).contains("\"command\": \"rowdiff\""));
 }

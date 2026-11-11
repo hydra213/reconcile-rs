@@ -22,7 +22,7 @@ You need a [Rust toolchain](https://rustup.rs). Two sample files and a sample
 configuration are included.
 
 ```bash
-cargo run -- rowdiff \
+cargo run -- compare \
   --left tests/fixtures/legacy_trades.parquet \
   --right tests/fixtures/new_trades.parquet \
   --config examples/reconcile.toml \
@@ -81,17 +81,20 @@ written down in [`tests/fixtures/README.md`](tests/fixtures/README.md).
 | Command | What it does |
 |---|---|
 | `reconcilers schema` | Compares schemas only. Reads file footers, no rows. |
-| `reconcilers rowdiff` | Compares schemas, then pairs rows by key and compares their values. |
+| `reconcilers rowdiff` | Compares rows only. Pairs rows by key and compares their values. Schemas are read to find the comparable columns, but not judged. |
+| `reconcilers compare` | The full reconciliation: the schema check, the row check and fingerprints, with one overall verdict. |
 
-Run either with `--help` for its options.
+Each command maps to one library function: `compare_parquet_schemas`,
+`compare_parquet_rows` and `compare_parquet`. Run any of them with `--help`
+for its options.
 
 ### Output files
 
-Both commands print a summary. With `--out-dir <directory>` they also write:
+Every command prints a summary. With `--out-dir <directory>` they also write:
 
 | File | Content |
 |---|---|
-| `findings.json` | The full report. Byte-identical for the same data and configuration. |
+| `findings.json` | The report, with the sections that command covers. Byte-identical for the same data and configuration. |
 | `report.md` | The same report as Markdown. |
 | `run.json` | What is specific to this run: tool version, start time, duration, file paths, sizes and digests. |
 
@@ -106,7 +109,7 @@ Both commands print a summary. With `--out-dir <directory>` they also write:
 
 ## Configuration
 
-`rowdiff` reads a TOML file. Only `keys` is required. Every other setting
+`rowdiff` and `compare` read a TOML file. Only `keys` is required. Every other setting
 defaults to the strict choice, and unknown settings are rejected.
 [`examples/reconcile.toml`](examples/reconcile.toml) lists every setting.
 
@@ -199,6 +202,9 @@ let reconciliation = compare_parquet(
 println!("{}", reconciliation.report.verdict);
 std::fs::write("findings.json", reconciliation.report.to_json())?;
 ```
+
+`compare_parquet` runs everything. To run one check on its own, call
+`compare_parquet_schemas` or `compare_parquet_rows` instead.
 
 ## How the code is organised
 

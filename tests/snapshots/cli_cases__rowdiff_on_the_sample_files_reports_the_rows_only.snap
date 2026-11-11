@@ -1,0 +1,27 @@
+---
+source: tests/cli_cases.rs
+expression: text
+---
+Verdict: FAIL
+
+Rows: FAIL (keys: trade_id)
+  5 left rows, 5 right rows, 4 matched keys, 4 rows compared
+  FAIL          1 key(s) exist only on the left side; at most 0 allowed (fail_on_missing_keys = true).
+  FAIL          1 key(s) exist only on the right side; at most 0 allowed (fail_on_extra_keys = true).
+  PASS          0 key(s) appear on more than one row; at most 0 allowed (fail_on_duplicate_keys = true).
+  PASS          0 row(s) have NULL in a key column; at most 0 allowed (fail_on_null_keys = true).
+  FAIL          1 matched row(s) have changed values; at most 0 allowed (max_changed_rows = 0).
+  INCONCLUSIVE  1 column(s) could not be compared; at most 0 allowed (strict_on_inconclusive = true).
+
+Columns:
+  `booked_at`: 0 mismatch(es)
+  `business_date`: 0 mismatch(es)
+  `currency`: 0 mismatch(es)
+  `price`: not compared, the left side is a decimal and the right side is a float; comparing them needs an explicit rule
+  `quantity`: 0 mismatch(es)
+  `trade_amount`: 1 mismatch(es)
+
+Examples (at most 10 of each kind; values are hidden, set `[report] show_values = true` to see them):
+  only on the left: key fingerprint c46d15685335e23d
+  only on the right: key fingerprint 08310d9533563235
+  changed: key fingerprint fa1fd134d8ad2873: `trade_amount`
