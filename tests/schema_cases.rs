@@ -7,7 +7,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use reconcilers::policy::SchemaPolicy;
-use reconcilers::report::SchemaReport;
+use reconcilers::report::{Report, SchemaSection};
 use reconcilers::schema::LogicalSchema;
 
 fn schema(fields: Vec<Field>) -> LogicalSchema {
@@ -23,7 +23,7 @@ fn baseline() -> LogicalSchema {
 }
 
 fn report_json(left: LogicalSchema, right: LogicalSchema, policy: SchemaPolicy) -> String {
-    SchemaReport::new(left, right, policy).to_json()
+    Report::schema_only(SchemaSection::new(&left, &right, policy)).to_json()
 }
 
 #[test]

@@ -6,6 +6,8 @@
 
 use std::path::PathBuf;
 
+use crate::config::ConfigError;
+
 /// An execution failure. The CLI maps every variant to exit code 2.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -31,4 +33,33 @@ pub enum Error {
         path: PathBuf,
         source: std::io::Error,
     },
+
+    #[error("cannot read rows from `{path}`")]
+    ReadRows {
+        path: PathBuf,
+        source: arrow::error::ArrowError,
+    },
+
+    #[error("a dataset needs at least one file")]
+    NoInputFiles,
+
+    #[error(
+        "`{other}` does not have the same schema as `{first}`, so they cannot form one dataset"
+    )]
+    FilesDisagreeOnSchema { first: PathBuf, other: PathBuf },
+
+    #[error("cannot read configuration file `{path}`")]
+    ReadConfig {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("the configuration is not valid TOML for ReconcileRS")]
+    ParseConfig {
+        // Boxed because the TOML error is large and would bloat every `Result`.
+        source: Box<toml::de::Error>,
+    },
+
+    #[error("invalid configuration: {0}")]
+    Config(#[from] ConfigError),
 }

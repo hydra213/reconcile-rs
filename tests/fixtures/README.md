@@ -27,18 +27,30 @@ No real data is involved.
 `trade_id`, `business_date`, `currency` and `booked_at` are identical.
 
 The rename shows up as one removed and one added column because renames are
-never guessed. Explicit column mappings arrive with the row comparison.
+never guessed. With the mapping in `examples/reconcile.toml`, the two columns
+are treated as one and the first two rows of this table disappear.
 
 Expected overall schema verdict: **fail** under both policies.
 
 ## Deliberate row differences
 
-Keyed on `trade_id`. These are not checked yet; they are the expected results
-for the row comparison.
+Keyed on `trade_id`, using `examples/reconcile.toml`.
 
 | trade_id | Expected finding |
 |---|---|
-| 1001, 1003, 1005 | matched; amount, currency and timestamp unchanged |
-| 1002 | matched; amount changed from 2750.50 to 2750.60 |
+| 1001, 1003, 1005 | matched and unchanged |
+| 1002 | matched; `trade_amount` changed from 2750.50 to 2750.60 |
 | 1004 | only on the left (missing from the candidate) |
 | 1006 | only on the right (extra in the candidate) |
+
+Expected counts: 4 matched keys, 4 compared rows, 1 changed, 3 unchanged,
+1 left-only, 1 right-only.
+
+`price` is a decimal on the left and a float on the right, so it is reported
+as inconclusive and not compared. `quantity` is compared even though it is
+Int32 on the left and Int64 on the right, because both are integers.
+
+## Other files
+
+`keyed_on_id.toml` is a minimal configuration used by tests that write their
+own small Parquet files.

@@ -1,0 +1,3 @@
+# Minimal configuration used by tests: rows are identified by `id`.
+[comparison]
+keys = ["id"]

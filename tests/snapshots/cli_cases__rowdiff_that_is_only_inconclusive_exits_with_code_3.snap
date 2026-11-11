@@ -1,0 +1,21 @@
+---
+source: tests/cli_cases.rs
+expression: stdout(&output)
+---
+Verdict: INCONCLUSIVE
+
+Schema: PASS (policy: strict)
+  2 left columns, 2 right columns
+  No schema differences.
+
+Rows: INCONCLUSIVE (keys: id)
+  1 left rows, 1 right rows, 1 matched keys, 1 rows compared
+  PASS          0 key(s) exist only on the left side; at most 0 allowed (fail_on_missing_keys = true).
+  PASS          0 key(s) exist only on the right side; at most 0 allowed (fail_on_extra_keys = true).
+  PASS          0 key(s) appear on more than one row; at most 0 allowed (fail_on_duplicate_keys = true).
+  PASS          0 row(s) have NULL in a key column; at most 0 allowed (fail_on_null_keys = true).
+  PASS          0 matched row(s) have changed values; at most 0 allowed (max_changed_rows = 0).
+  INCONCLUSIVE  1 column(s) could not be compared; at most 0 allowed (strict_on_inconclusive = true).
+
+Columns:
+  `opens_at`: not compared, the left type Time64(µs) is not supported yet

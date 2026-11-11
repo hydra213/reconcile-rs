@@ -1,51 +1,22 @@
-//! Policies: turning observed facts into verdicts.
+//! Schema rules: judging schema differences.
 //!
-//! Every verdict comes from exactly one named rule, so a report can always
-//! say *why* something passed, warned or failed. To see how a schema
-//! difference is judged, read `choose_schema_rule` and
+//! To see how a schema difference is judged, read `choose_schema_rule` and
 //! [`SchemaRule::verdict`]; there is no other place where it is decided.
 
 use std::fmt;
 
 use arrow::datatypes::DataType;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use super::Verdict;
 use crate::schema::SchemaDifference;
 
-/// The outcome of a check, ordered from best to worst.
-///
-/// The order matters: the overall verdict of a report is the worst verdict
-/// among its findings, found with `max()`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Verdict {
-    /// The check holds.
-    Pass,
-    /// A difference exists and the policy allows it. Worth a human look.
-    Warn,
-    /// The engine could not decide. Never treated as a pass.
-    Inconclusive,
-    /// The policy is violated.
-    Fail,
-}
-
-impl fmt::Display for Verdict {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let text = match self {
-            Self::Pass => "PASS",
-            Self::Warn => "WARN",
-            Self::Inconclusive => "INCONCLUSIVE",
-            Self::Fail => "FAIL",
-        };
-        f.write_str(text)
-    }
-}
-
 /// How strictly the right schema must match the left schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SchemaPolicy {
-    /// Any difference fails.
+    /// Any difference fails. This is the default.
+    #[default]
     Strict,
     /// Changes that cannot lose or corrupt existing data are allowed with a
     /// warning. Everything else fails.
@@ -149,11 +120,7 @@ pub fn evaluate_schema(
 
 /// The worst verdict among the findings, or `Pass` when there are none.
 pub fn overall_schema_verdict(findings: &[SchemaFinding]) -> Verdict {
-    findings
-        .iter()
-        .map(|finding| finding.verdict)
-        .max()
-        .unwrap_or(Verdict::Pass)
+    super::worst_verdict(findings.iter().map(|finding| finding.verdict))
 }
 
 /// Picks the single rule that applies to a difference.

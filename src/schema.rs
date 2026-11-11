@@ -40,7 +40,7 @@ impl LogicalSchema {
     /// Fails if two columns share a name, because columns are matched by name
     /// and a repeated name would make that match ambiguous.
     pub fn from_arrow(schema: &Schema) -> Result<Self, DuplicateColumnName> {
-        let mut columns: Vec<Column> = schema
+        let columns: Vec<Column> = schema
             .fields()
             .iter()
             .map(|field| Column {
@@ -49,6 +49,38 @@ impl LogicalSchema {
                 nullable: field.is_nullable(),
             })
             .collect();
+        Self::from_columns(columns)
+    }
+
+    /// The columns, sorted by name.
+    pub fn columns(&self) -> &[Column] {
+        &self.columns
+    }
+
+    /// The column with this exact name, if there is one.
+    pub fn column(&self, name: &str) -> Option<&Column> {
+        self.columns.iter().find(|column| column.name == name)
+    }
+
+    /// A copy of this schema where each column named by a key of `new_names`
+    /// is renamed to the matching value. Other columns keep their names.
+    ///
+    /// Fails if a new name collides with a column that already exists.
+    pub fn with_renamed_columns(
+        &self,
+        new_names: &BTreeMap<String, String>,
+    ) -> Result<Self, DuplicateColumnName> {
+        let mut columns = self.columns.clone();
+        for column in &mut columns {
+            if let Some(new_name) = new_names.get(&column.name) {
+                column.name = new_name.clone();
+            }
+        }
+        Self::from_columns(columns)
+    }
+
+    /// Sorts the columns by name and rejects repeated names.
+    fn from_columns(mut columns: Vec<Column>) -> Result<Self, DuplicateColumnName> {
         columns.sort_by(|a, b| a.name.cmp(&b.name));
 
         // After sorting, a repeated name sits next to its twin.
@@ -61,11 +93,6 @@ impl LogicalSchema {
         }
 
         Ok(Self { columns })
-    }
-
-    /// The columns, sorted by name.
-    pub fn columns(&self) -> &[Column] {
-        &self.columns
     }
 }
 

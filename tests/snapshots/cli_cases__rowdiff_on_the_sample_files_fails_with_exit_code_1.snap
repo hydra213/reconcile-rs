@@ -1,0 +1,31 @@
+---
+source: tests/cli_cases.rs
+expression: stdout(&output)
+---
+Verdict: FAIL
+
+Schema: FAIL (policy: compatible)
+  7 left columns, 8 right columns
+  WARN          `desk` exists only on the right side
+                A new column does not affect existing data, but it has no baseline to compare against.
+  FAIL          `price` changed type from Decimal128(18, 4) to Float64
+                The type change is not on the list of lossless changes and needs an explicit decision.
+  WARN          `quantity` changed type from Int32 to Int64
+                Every value of the baseline integer type fits in the candidate type.
+
+Rows: FAIL (keys: trade_id)
+  5 left rows, 5 right rows, 4 matched keys, 4 rows compared
+  FAIL          1 key(s) exist only on the left side; at most 0 allowed (fail_on_missing_keys = true).
+  FAIL          1 key(s) exist only on the right side; at most 0 allowed (fail_on_extra_keys = true).
+  PASS          0 key(s) appear on more than one row; at most 0 allowed (fail_on_duplicate_keys = true).
+  PASS          0 row(s) have NULL in a key column; at most 0 allowed (fail_on_null_keys = true).
+  FAIL          1 matched row(s) have changed values; at most 0 allowed (max_changed_rows = 0).
+  INCONCLUSIVE  1 column(s) could not be compared; at most 0 allowed (strict_on_inconclusive = true).
+
+Columns:
+  `booked_at`: 0 mismatch(es)
+  `business_date`: 0 mismatch(es)
+  `currency`: 0 mismatch(es)
+  `price`: not compared, the left side is a decimal and the right side is a float; comparing them needs an explicit rule
+  `quantity`: 0 mismatch(es)
+  `trade_amount`: 1 mismatch(es)

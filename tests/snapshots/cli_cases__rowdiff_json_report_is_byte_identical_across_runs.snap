@@ -1,0 +1,214 @@
+---
+source: tests/cli_cases.rs
+expression: first_json
+---
+{
+  "report_version": 1,
+  "verdict": "fail",
+  "schema": {
+    "policy": "compatible",
+    "verdict": "fail",
+    "findings": [
+      {
+        "kind": "column_added",
+        "column": "desk",
+        "rule": "column_added",
+        "verdict": "warn",
+        "explanation": "A new column does not affect existing data, but it has no baseline to compare against."
+      },
+      {
+        "kind": "type_changed",
+        "column": "price",
+        "left": "Decimal128(18, 4)",
+        "right": "Float64",
+        "rule": "incompatible_type_change",
+        "verdict": "fail",
+        "explanation": "The type change is not on the list of lossless changes and needs an explicit decision."
+      },
+      {
+        "kind": "type_changed",
+        "column": "quantity",
+        "left": "Int32",
+        "right": "Int64",
+        "rule": "lossless_integer_widening",
+        "verdict": "warn",
+        "explanation": "Every value of the baseline integer type fits in the candidate type."
+      }
+    ],
+    "left_columns": [
+      {
+        "name": "booked_at",
+        "data_type": "Timestamp(µs, \"UTC\")",
+        "nullable": true
+      },
+      {
+        "name": "business_date",
+        "data_type": "Date32",
+        "nullable": false
+      },
+      {
+        "name": "currency",
+        "data_type": "Utf8",
+        "nullable": true
+      },
+      {
+        "name": "price",
+        "data_type": "Decimal128(18, 4)",
+        "nullable": true
+      },
+      {
+        "name": "quantity",
+        "data_type": "Int32",
+        "nullable": true
+      },
+      {
+        "name": "trade_amount",
+        "data_type": "Decimal128(18, 2)",
+        "nullable": true
+      },
+      {
+        "name": "trade_id",
+        "data_type": "Int64",
+        "nullable": false
+      }
+    ],
+    "right_columns": [
+      {
+        "name": "booked_at",
+        "data_type": "Timestamp(µs, \"UTC\")",
+        "nullable": true
+      },
+      {
+        "name": "business_date",
+        "data_type": "Date32",
+        "nullable": false
+      },
+      {
+        "name": "currency",
+        "data_type": "Utf8",
+        "nullable": true
+      },
+      {
+        "name": "desk",
+        "data_type": "Utf8",
+        "nullable": true
+      },
+      {
+        "name": "price",
+        "data_type": "Float64",
+        "nullable": true
+      },
+      {
+        "name": "quantity",
+        "data_type": "Int64",
+        "nullable": true
+      },
+      {
+        "name": "trade_amount",
+        "data_type": "Decimal128(18, 2)",
+        "nullable": true
+      },
+      {
+        "name": "trade_id",
+        "data_type": "Int64",
+        "nullable": false
+      }
+    ]
+  },
+  "rows": {
+    "verdict": "fail",
+    "keys": [
+      "trade_id"
+    ],
+    "counts": {
+      "left_rows": 5,
+      "right_rows": 5,
+      "null_key_rows_left": 0,
+      "null_key_rows_right": 0,
+      "duplicate_keys_left": 0,
+      "duplicate_keys_right": 0,
+      "left_only_keys": 1,
+      "right_only_keys": 1,
+      "matched_keys": 4,
+      "compared_rows": 4,
+      "changed_rows": 1,
+      "unchanged_rows": 3
+    },
+    "findings": [
+      {
+        "check": "missing_keys",
+        "observed": 1,
+        "allowed": 0,
+        "verdict": "fail",
+        "explanation": "1 key(s) exist only on the left side; at most 0 allowed (fail_on_missing_keys = true)."
+      },
+      {
+        "check": "extra_keys",
+        "observed": 1,
+        "allowed": 0,
+        "verdict": "fail",
+        "explanation": "1 key(s) exist only on the right side; at most 0 allowed (fail_on_extra_keys = true)."
+      },
+      {
+        "check": "duplicate_keys",
+        "observed": 0,
+        "allowed": 0,
+        "verdict": "pass",
+        "explanation": "0 key(s) appear on more than one row; at most 0 allowed (fail_on_duplicate_keys = true)."
+      },
+      {
+        "check": "null_keys",
+        "observed": 0,
+        "allowed": 0,
+        "verdict": "pass",
+        "explanation": "0 row(s) have NULL in a key column; at most 0 allowed (fail_on_null_keys = true)."
+      },
+      {
+        "check": "changed_rows",
+        "observed": 1,
+        "allowed": 0,
+        "verdict": "fail",
+        "explanation": "1 matched row(s) have changed values; at most 0 allowed (max_changed_rows = 0)."
+      },
+      {
+        "check": "inconclusive_columns",
+        "observed": 1,
+        "allowed": 0,
+        "verdict": "inconclusive",
+        "explanation": "1 column(s) could not be compared; at most 0 allowed (strict_on_inconclusive = true)."
+      }
+    ],
+    "columns": [
+      {
+        "status": "compared",
+        "column": "booked_at",
+        "mismatches": 0
+      },
+      {
+        "status": "compared",
+        "column": "business_date",
+        "mismatches": 0
+      },
+      {
+        "status": "compared",
+        "column": "currency",
+        "mismatches": 0
+      },
+      {
+        "status": "inconclusive",
+        "column": "price",
+        "reason": "the left side is a decimal and the right side is a float; comparing them needs an explicit rule"
+      },
+      {
+        "status": "compared",
+        "column": "quantity",
+        "mismatches": 0
+      },
+      {
+        "status": "compared",
+        "column": "trade_amount",
+        "mismatches": 1
+      }
+    ]
+  }
+}
